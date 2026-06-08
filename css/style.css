@@ -47,6 +47,29 @@
   --shadow-glow: 0 0 20px rgba(129, 140, 248, 0.15);
 
   --hljs-theme-url: url('https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css');
+
+  /* ── Danger alpha variants ── */
+  --color-danger-bg:         rgba(248, 113, 113, 0.1);
+  --color-danger-bg-hover:   rgba(248, 113, 113, 0.2);
+
+  /* ── Fallback badge ── */
+  --color-fallback:          #f59e0b;
+  --color-fallback-bg:       rgba(245, 158, 11, 0.08);
+  --color-fallback-border:   rgba(245, 158, 11, 0.15);
+
+  /* ── Like button active ── */
+  --color-like-active:       #f43f5e;
+  --color-like-active-bg:    rgba(244, 63, 94, 0.08);
+
+  /* ── Accent glow / overlay variants ── */
+  --color-accent-faint:      rgba(129, 140, 248, 0.06);
+  --color-accent-glow-icon:  rgba(167, 139, 250, 0.4);
+  --color-accent-glow-sm:    rgba(167, 139, 250, 0.3);
+  --color-auth-overlay-1:    rgba(124, 58, 237, 0.15);
+  --color-auth-overlay-2:    rgba(192, 132, 252, 0.1);
+
+  /* ── Chat area fixed background (not overridden by color themes) ── */
+  --color-chat-bg:           #070c1a;
 }
 
 /* ── CSS Variables: Light Theme ── */
@@ -88,6 +111,29 @@
   --shadow-md:   0 4px 16px rgba(0,0,0,0.1);
   --shadow-lg:   0 8px 32px rgba(0,0,0,0.12);
   --shadow-glow: 0 0 20px rgba(109, 40, 217, 0.1);
+
+  /* ── Danger alpha variants ── */
+  --color-danger-bg:         rgba(220, 38, 38, 0.08);
+  --color-danger-bg-hover:   rgba(220, 38, 38, 0.15);
+
+  /* ── Fallback badge ── */
+  --color-fallback:          #d97706;
+  --color-fallback-bg:       rgba(217, 119, 6, 0.08);
+  --color-fallback-border:   rgba(217, 119, 6, 0.15);
+
+  /* ── Like button active ── */
+  --color-like-active:       #e11d48;
+  --color-like-active-bg:    rgba(225, 29, 72, 0.08);
+
+  /* ── Accent glow / overlay variants ── */
+  --color-accent-faint:      rgba(109, 40, 217, 0.04);
+  --color-accent-glow-icon:  rgba(109, 40, 217, 0.3);
+  --color-accent-glow-sm:    rgba(109, 40, 217, 0.2);
+  --color-auth-overlay-1:    rgba(109, 40, 217, 0.1);
+  --color-auth-overlay-2:    rgba(147, 51, 234, 0.08);
+
+  /* ── Chat area fixed background (not overridden by color themes) ── */
+  --color-chat-bg:           #fafafa;
 }
 
 /* ── Reset & Base ── */
@@ -129,13 +175,13 @@ body {
 
 .auth-bg {
   position: absolute; inset: 0; overflow: hidden;
-  background: radial-gradient(ellipse at 30% 20%, rgba(124,58,237,0.15) 0%, transparent 60%),
-              radial-gradient(ellipse at 70% 80%, rgba(192,132,252,0.1) 0%, transparent 60%);
+  background: radial-gradient(ellipse at 30% 20%, var(--color-auth-overlay-1) 0%, transparent 60%),
+              radial-gradient(ellipse at 70% 80%, var(--color-auth-overlay-2) 0%, transparent 60%);
 }
 .auth-glow {
   position: absolute; width: 600px; height: 600px;
   top: 50%; left: 50%; transform: translate(-50%, -50%);
-  background: radial-gradient(circle, rgba(129,140,248,0.06) 0%, transparent 70%);
+  background: radial-gradient(circle, var(--color-accent-faint) 0%, transparent 70%);
   border-radius: 50%;
   animation: pulse-glow 4s ease-in-out infinite;
 }
@@ -175,7 +221,7 @@ body {
 .auth-logo { margin-bottom: 16px; }
 .logo-svg {
   width: 72px; height: 72px;
-  filter: drop-shadow(0 0 12px rgba(167,139,250,0.4));
+  filter: drop-shadow(0 0 12px var(--color-accent-glow-icon));
   animation: float 4s ease-in-out infinite;
 }
 @keyframes float {
@@ -463,6 +509,7 @@ body {
 .messages-area {
   flex: 1; overflow-y: auto; padding: 24px 0;
   display: flex; flex-direction: column;
+  background: var(--color-chat-bg);
 }
 
 /* Welcome State */
@@ -471,7 +518,7 @@ body {
   align-items: center; justify-content: center;
   padding: 40px 20px; text-align: center;
 }
-.welcome-icon { margin-bottom: 20px; filter: drop-shadow(0 4px 16px rgba(167,139,250,0.3)); animation: float 4s ease-in-out infinite; }
+.welcome-icon { margin-bottom: 20px; filter: drop-shadow(0 4px 16px var(--color-accent-glow-sm)); animation: float 4s ease-in-out infinite; }
 .welcome-title { font-size: 1.5rem; font-weight: 700; margin-bottom: 8px; }
 .welcome-subtitle { color: var(--color-text-2); margin-bottom: 24px; }
 .welcome-suggestions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
@@ -527,6 +574,9 @@ body {
   font-size: 0.9rem; line-height: 1.65;
   color: var(--color-text);
   position: relative;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  min-width: 0;
 }
 .message.user .message-bubble {
   background: var(--color-user-bubble);
@@ -542,13 +592,13 @@ body {
   align-items: center;
   gap: 3px;
   font-size: 0.68rem;
-  color: #d97706; /* Amber color to match lightning bolt */
-  background: rgba(217, 119, 6, 0.08);
+  color: var(--color-fallback);
+  background: var(--color-fallback-bg);
   padding: 2px 6px;
   border-radius: 6px;
   margin-top: 8px;
   font-weight: 500;
-  border: 1px solid rgba(217, 119, 6, 0.15);
+  border: 1px solid var(--color-fallback-border);
   width: fit-content;
 }
 
@@ -630,6 +680,8 @@ body {
   font-family: inherit;
 }
 .message-action-btn:hover { background: var(--color-accent-dark); color: var(--color-accent); border-color: var(--color-accent); }
+.message-action-btn.like-btn.liked { color: var(--color-like-active); border-color: var(--color-like-active); background: var(--color-like-active-bg); }
+.message-action-btn.like-btn .like-count { font-size: 0.75rem; }
 
 /* Typing indicator */
 .typing-indicator {
@@ -777,12 +829,12 @@ body {
 .btn-secondary:hover { border-color: var(--color-accent); color: var(--color-accent); }
 
 .btn-danger {
-  background: rgba(248, 113, 113, 0.1); border: 1px solid var(--color-danger);
+  background: var(--color-danger-bg); border: 1px solid var(--color-danger);
   color: var(--color-danger); padding: 10px 20px; border-radius: 12px;
   cursor: pointer; font-family: inherit; font-size: 0.88rem; font-weight: 500;
   transition: all 0.15s; width: 100%;
 }
-.btn-danger:hover { background: rgba(248, 113, 113, 0.2); }
+.btn-danger:hover { background: var(--color-danger-bg-hover); }
 
 .mt-2 { margin-top: 8px; }
 
@@ -889,6 +941,36 @@ body {
 .theme-option.active { border-color: var(--color-accent); color: var(--color-accent); background: var(--color-accent-dark); }
 .theme-option-icon { font-size: 1.4rem; }
 
+/* Color Theme Picker */
+.color-theme-options {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+}
+.color-theme-option {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; border-radius: 12px;
+  border: 1px solid var(--color-border); background: var(--color-surface-2);
+  cursor: pointer; font-family: inherit; font-size: 0.82rem; color: var(--color-text-2);
+  transition: all 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+.color-theme-option:hover { border-color: var(--color-accent); color: var(--color-accent); }
+.color-theme-option.active {
+  border-color: var(--color-accent); color: var(--color-accent);
+  background: var(--color-accent-dark);
+}
+.color-theme-swatch {
+  width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+}
+.cto-default { background: #818cf8; }
+.cto-mauve   { background: #c09ac3; }
+.cto-sage    { background: #92b89a; }
+.cto-amber   { background: #cc9c78; }
+
+@media (max-width: 700px) {
+  .color-theme-options { grid-template-columns: 1fr 1fr; }
+}
+
 /* API test result */
 .api-test-result { font-size: 0.85rem; margin-left: 10px; }
 .api-test-result.success { color: var(--color-success); }
@@ -933,10 +1015,10 @@ body {
 .memory-category-badge {
   padding: 2px 8px; border-radius: 10px; font-size: 0.72rem; font-weight: 500;
 }
-.category-profile { background: rgba(129,140,248,0.15); color: #818cf8; }
-.category-preference { background: rgba(192,132,252,0.15); color: #c084fc; }
-.category-knowledge { background: rgba(16,185,129,0.15); color: #10b981; }
-.category-other { background: rgba(148,163,184,0.15); color: #94a3b8; }
+.category-profile { background: color-mix(in srgb, var(--color-accent) 15%, transparent); color: var(--color-accent); }
+.category-preference { background: color-mix(in srgb, var(--color-accent-2) 15%, transparent); color: var(--color-accent-2); }
+.category-knowledge { background: color-mix(in srgb, var(--color-success) 15%, transparent); color: var(--color-success); }
+.category-other { background: color-mix(in srgb, var(--color-text-2) 15%, transparent); color: var(--color-text-2); }
 .memory-item-actions { display: flex; gap: 4px; }
 .memory-delete-btn {
   background: none; border: none; color: var(--color-text-3);
@@ -1028,7 +1110,7 @@ body {
 }
 .context-menu-item:hover { background: var(--color-sidebar-hover); color: var(--color-accent); }
 .context-menu-item svg { width: 18px; height: 18px; opacity: 0.8; }
-.context-menu-item.danger:hover { background: rgba(248,113,113,0.1); color: var(--color-danger); }
+.context-menu-item.danger:hover { background: var(--color-danger-bg); color: var(--color-danger); }
 .context-menu-divider { height: 1px; background: var(--color-border); margin: 6px 0; }
 
 /* Memory Suggestion Toast */
@@ -1199,7 +1281,7 @@ body {
   color: var(--color-text-3); padding: 4px 0;
   font-weight: 600;
 }
-.cal-day-label.sun { color: #f87171; }
+.cal-day-label.sun { color: var(--color-danger); }
 .cal-day-label.sat { color: var(--color-accent); }
 
 .cal-day {
@@ -1314,7 +1396,7 @@ body {
   color: var(--color-text-2);
 }
 .cal-action-btn:hover { background: var(--color-accent-dark); border-color: var(--color-accent); }
-.cal-action-btn.danger:hover { background: rgba(248,113,113,0.1); border-color: var(--color-danger); }
+.cal-action-btn.danger:hover { background: var(--color-danger-bg); border-color: var(--color-danger); }
 
 /* Event Add/Edit Modal */
 .event-modal-content {
@@ -1386,4 +1468,137 @@ body {
   .cal-day { min-height: 44px; }
   .event-date-row { flex-direction: column; gap: 4px; }
   .event-date-row > div[style*="padding-top"] { display: none; }
+}
+
+/* ══════════════════════════════════════════
+   Color Theme Overrides
+   data-color-theme="default" / "mauve" / "sage" / "amber"
+   ══════════════════════════════════════════ */
+
+/* ── Default Theme ── */
+[data-color-theme="default"][data-theme="light"] {
+  --color-accent:      #7c6fcd;
+  --color-accent-2:    #a89de0;
+  --color-accent-glow: rgba(124, 111, 205, 0.15);
+  --color-accent-dark: rgba(124, 111, 205, 0.08);
+  --color-moon:        #c0b8f8;
+  --color-moon-glow:   rgba(192, 184, 248, 0.15);
+  --color-bg:          #f9f8fe;
+  --color-bg-2:        #f2f0fb;
+  --color-surface:     #ffffff;
+  --color-surface-2:   #f6f4fd;
+  --color-sidebar:     #f2f0fb;
+  --color-border:      #c8c0f0;
+  --color-border-light: #e4e0f8;
+}
+[data-color-theme="default"][data-theme="dark"] {
+  --color-accent:      #9d93e0;
+  --color-accent-2:    #b8b0ed;
+  --color-accent-glow: rgba(157, 147, 224, 0.25);
+  --color-accent-dark: rgba(157, 147, 224, 0.1);
+  --color-moon:        #d0caff;
+  --color-moon-glow:   rgba(208, 202, 255, 0.2);
+  --color-bg:          #07081c;
+  --color-bg-2:        #0d0e28;
+  --color-surface:     #11122a;
+  --color-surface-2:   #181938;
+  --color-sidebar:     #0a0b20;
+  --color-border:      #3d3568;
+  --color-border-light: #2a2450;
+}
+
+/* ── Mauve Theme ── */
+[data-color-theme="mauve"][data-theme="light"] {
+  --color-accent:      #9b7b9e;
+  --color-accent-2:    #b89ebb;
+  --color-accent-glow: rgba(155, 123, 158, 0.15);
+  --color-accent-dark: rgba(155, 123, 158, 0.08);
+  --color-moon:        #c8a8cc;
+  --color-moon-glow:   rgba(200, 168, 204, 0.15);
+  --color-bg:          #fdf8fe;
+  --color-bg-2:        #f7f0f9;
+  --color-surface:     #ffffff;
+  --color-surface-2:   #faf3fb;
+  --color-sidebar:     #f7f0f9;
+  --color-border:      #d4b8d7;
+  --color-border-light: #ecdcee;
+}
+[data-color-theme="mauve"][data-theme="dark"] {
+  --color-accent:      #c09ac3;
+  --color-accent-2:    #d4b8d7;
+  --color-accent-glow: rgba(192, 154, 195, 0.25);
+  --color-accent-dark: rgba(192, 154, 195, 0.1);
+  --color-moon:        #dcc0e0;
+  --color-moon-glow:   rgba(220, 192, 224, 0.2);
+  --color-bg:          #0d080f;
+  --color-bg-2:        #16101a;
+  --color-surface:     #1c1220;
+  --color-surface-2:   #24192a;
+  --color-sidebar:     #110e18;
+  --color-border:      #4a2e4d;
+  --color-border-light: #3a2240;
+}
+
+/* ── Sage Theme ── */
+[data-color-theme="sage"][data-theme="light"] {
+  --color-accent:      #7a9b82;
+  --color-accent-2:    #9bb5a2;
+  --color-accent-glow: rgba(122, 155, 130, 0.15);
+  --color-accent-dark: rgba(122, 155, 130, 0.08);
+  --color-moon:        #a8c8b0;
+  --color-moon-glow:   rgba(168, 200, 176, 0.15);
+  --color-bg:          #f6fbf7;
+  --color-bg-2:        #edf5ef;
+  --color-surface:     #ffffff;
+  --color-surface-2:   #f2f8f4;
+  --color-sidebar:     #edf5ef;
+  --color-border:      #b0c8b8;
+  --color-border-light: #d8eadc;
+}
+[data-color-theme="sage"][data-theme="dark"] {
+  --color-accent:      #92b89a;
+  --color-accent-2:    #aecfb6;
+  --color-accent-glow: rgba(146, 184, 154, 0.25);
+  --color-accent-dark: rgba(146, 184, 154, 0.1);
+  --color-moon:        #b8d8be;
+  --color-moon-glow:   rgba(184, 216, 190, 0.2);
+  --color-bg:          #07100a;
+  --color-bg-2:        #0d1812;
+  --color-surface:     #111e16;
+  --color-surface-2:   #18261c;
+  --color-sidebar:     #0b140e;
+  --color-border:      #2a4230;
+  --color-border-light: #1e3824;
+}
+
+/* ── Amber Theme ── */
+[data-color-theme="amber"][data-theme="light"] {
+  --color-accent:      #b08060;
+  --color-accent-2:    #c49e82;
+  --color-accent-glow: rgba(176, 128, 96, 0.15);
+  --color-accent-dark: rgba(176, 128, 96, 0.08);
+  --color-moon:        #c8a07a;
+  --color-moon-glow:   rgba(200, 160, 122, 0.15);
+  --color-bg:          #fdfaf5;
+  --color-bg-2:        #f8f2e8;
+  --color-surface:     #ffffff;
+  --color-surface-2:   #fcf6ec;
+  --color-sidebar:     #f8f2e8;
+  --color-border:      #d4b89a;
+  --color-border-light: #eeddd0;
+}
+[data-color-theme="amber"][data-theme="dark"] {
+  --color-accent:      #cc9c78;
+  --color-accent-2:    #ddb898;
+  --color-accent-glow: rgba(204, 156, 120, 0.25);
+  --color-accent-dark: rgba(204, 156, 120, 0.1);
+  --color-moon:        #ddb888;
+  --color-moon-glow:   rgba(221, 184, 136, 0.2);
+  --color-bg:          #110e07;
+  --color-bg-2:        #1a1508;
+  --color-surface:     #1e1c10;
+  --color-surface-2:   #262214;
+  --color-sidebar:     #160e06;
+  --color-border:      #4a3020;
+  --color-border-light: #3a2410;
 }

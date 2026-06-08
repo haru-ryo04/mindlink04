@@ -221,6 +221,7 @@ const MindLinkChat = (() => {
               ${(!isUser && msg.actualModel && msg.requestedModel && msg.actualModel !== msg.requestedModel) ? `
                 <div class="fallback-badge" title="高速な代替モデル（${msg.actualModel}）で返答しました">⚡ (代打)</div>
               ` : ''}
+              ${(!isUser && msg.webSearchUsed) ? `<div style="display:inline-flex;align-items:center;gap:4px;margin-top:6px;font-size:11px;padding:2px 8px;background:rgba(59,130,246,0.12);color:#60a5fa;border-radius:12px;border:1px solid rgba(59,130,246,0.25);" title="Web検索を使って回答しました">🔍 Web検索</div>` : ''}
             </div>
             <div class="message-time">${formatTime(msg.timestamp)}</div>
           </div>
@@ -241,6 +242,9 @@ const MindLinkChat = (() => {
             </button>` : ''}
             ${!isUser ? `<button class="message-action-btn save-memory-btn" title="記憶に追加">
               🧠 記憶に追加
+            </button>` : ''}
+            ${!isUser ? `<button class="message-action-btn like-btn" title="いいね" data-like-count="0">
+              ❤️ <span class="like-count"></span>
             </button>` : ''}
           </div>` : ''}
         </div>
@@ -274,6 +278,19 @@ const MindLinkChat = (() => {
       openAddMemoryWithContent(msg.content.slice(0, 500));
     });
 
+    // いいね
+    wrapper.querySelector('.like-btn')?.addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      const newCount = (parseInt(btn.dataset.likeCount) || 0) + 1;
+      btn.dataset.likeCount = newCount;
+      btn.querySelector('.like-count').textContent = newCount > 0 ? newCount : '';
+      btn.classList.add('liked');
+      try {
+        await MindLinkStorage.addLikedMessage({ id: msg.id, content: msg.content });
+      } catch (err) {
+        console.warn('[MindLink] addLikedMessage error:', err);
+      }
+    });
 
     area.appendChild(wrapper);
 
@@ -510,11 +527,51 @@ const MindLinkChat = (() => {
           actualModel: actualModel,
           requestedModel: requestedModel,
           isSafety: isSafety,
+          webSearchUsed: suggestions.includes('__web_search__'),
         };
         MindLinkStorage.addMessage(threadId, aiMsg);
         appendMessage(aiMsg, persona);
         MindLinkThreads.touchThread(threadId);
         MindLinkThreads.renderThreadList();
+
+        // 添付ファイルがある場合、バックグラウンドで要約生成してlocalStorageの履歴を軽量化
+        if (userMsg.attachments && userMsg.attachments.some(att => att.data || att.url)) {
+          (async () => {
+            try {
+              const summaryLines = [];
+              for (const att of userMsg.attachments) {
+                if (!att.data && !att.url) continue;
+                const summary = await window.MindLinkAPI.summarizeAttachment(att);
+                if (summary) {
+                  const label = att.name ? `📎 ${att.name}` : att.url ? `🔗 ${att.url}` : '📎 添付ファイル';
+                  summaryLines.push(`${label}\n${summary}`);
+                }
+              }
+              if (summaryLines.length > 0) {
+                // localStorageの該当メッセージにサマリーを追記・attachmentsをクリア
+                const allMsgs = MindLinkStorage.getMessages(threadId);
+                const updated = allMsgs.map(m => {
+                  if (m.id !== userMsg.id) return m;
+                  return {
+                    ...m,
+                    content: m.content
+                      ? `${m.content}\n\n【添付内容の要約】\n${summaryLines.join('\n\n')}`
+                      : `【添付内容の要約】\n${summaryLines.join('\n\n')}`,
+                    attachments: (m.attachments || []).map(att => ({
+                      name: att.name,
+                      type: att.type,
+                      size: att.size,
+                    })),
+                  };
+                });
+                MindLinkStorage.setMessages(threadId, updated);
+                console.log('[MindLink] 添付要約をlocalStorageに保存しました');
+              }
+            } catch (e) {
+              console.warn('[MindLink] 添付要約の生成に失敗:', e);
+            }
+          })();
+        }
 
         // 10ターン（ユーザー送信10回＝合計20メッセージ）ごとに今日の会話要約をバックグラウンド更新
         const _allMsgs = MindLinkStorage.getMessages(threadId).filter(m => !m.isSystem);
@@ -554,9 +611,10 @@ const MindLinkChat = (() => {
         }
         */
 
-        // メモリ提案表示
-        if (suggestions.length > 0) {
-          MindLinkMemory.showMemorySuggestion(suggestions[0]);
+        // メモリ提案表示（内部マーカーを除外してから表示）
+        const memorySuggestions = suggestions.filter(s => s !== '__web_search__');
+        if (memorySuggestions.length > 0) {
+          MindLinkMemory.showMemorySuggestion(memorySuggestions[0]);
         }
       },
       onError: (err) => {
@@ -942,6 +1000,25 @@ const MindLinkChat = (() => {
 
   function isStreaming() { return _isStreaming; }
 
+  // 外部モジュール（camera.js等）から添付ファイルを追加するためのブリッジ
+  function addAttachment(fileData) {
+    if (_attachedFiles.length >= 5) return false;
+    _attachedFiles.push(fileData);
+    renderFilePreviews();
+    const sendBtn = document.getElementById('btn-send');
+    if (sendBtn) sendBtn.disabled = false;
+    return true;
+  }
+
+  // カメラ専用：プレビューなしで添付（トーストで通知）
+  function addAttachmentSilent(fileData) {
+    if (_attachedFiles.length >= 5) return false;
+    _attachedFiles.push(fileData);
+    const sendBtn = document.getElementById('btn-send');
+    if (sendBtn) sendBtn.disabled = false;
+    return true;
+  }
+
   return {
     setupMarkdown,
     clearMessages,
@@ -957,6 +1034,8 @@ const MindLinkChat = (() => {
     initFileEvents,
     sendAutonomousMessage,
     sendContinueMessage,
+    addAttachment,
+    addAttachmentSilent,
   };
 })();
 

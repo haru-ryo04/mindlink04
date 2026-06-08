@@ -104,6 +104,45 @@ ${context.slice(0, 40000)}
         console.warn('[MindLink] deleteDailySummary after reflection failed:', e)
       );
 
+      // ── 4つ目の省察：いいねスタイル学習 ──
+      try {
+        const likedMsgs = await MindLinkStorage.getLikedMessages();
+        if (likedMsgs && likedMsgs.length > 0) {
+          const likedList = likedMsgs
+            .sort((a, b) => b.likeCount - a.likeCount)
+            .map(m => `[いいね数: ${m.likeCount}]\n${m.content}`)
+            .join('\n\n');
+          const stylePrompt = `以下はユーザーがいいねしたAIの返答です。
+likeCount が多いほど強く好まれています。
+文章をそのまま抽出せず、
+「どんな言い回し・語尾・テンポ・雰囲気が好まれているか」
+を傾向として簡潔に言語化してください。
+定型文にならないよう、スタイルの特徴だけを抽出してください。
+JSONなどの構造化は不要。自然な日本語で200文字以内。
+
+${likedList.slice(0, 10000)}`;
+          const styleSummary = await window.MindLinkAPI.getSummary(stylePrompt, false);
+          if (styleSummary) {
+            const today = new Date().toISOString().slice(0, 10);
+            await MindLinkStorage.saveLikedStyleSummary({ date: today, summary: styleSummary });
+            await MindLinkStorage.clearLikedMessages();
+            console.log('[MindLink] いいねスタイル学習完了:', styleSummary);
+          }
+        }
+      } catch (styleErr) {
+        console.warn('[MindLink] いいねスタイル省察 failed:', styleErr);
+      }
+
+      // ── 古いいいねスタイル要約を自動削除（重み0.09以下 = 約10日以上前） ──
+      try {
+        const pruned = await MindLinkStorage.pruneOldLikedStyleSummaries(0.09);
+        if (pruned > 0) {
+          console.log(`[MindLink] 古いスタイル要約を${pruned}件削除しました`);
+        }
+      } catch (pruneErr) {
+        console.warn('[MindLink] スタイル要約の自動削除に失敗:', pruneErr);
+      }
+
       // リストの再描画
       await renderReflectionList();
 

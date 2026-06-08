@@ -16,10 +16,12 @@ const MindLinkApp = (() => {
   async function init() {
     MindLinkChat.setupMarkdown();
     applyTheme();
+    applyColorTheme();
     applyFontSize(); // 保存済みフォントサイズをアプリ起動直後に即時適用
     initThemeWatcher();
     initEventListeners();
     MindLinkChat.initFileEvents();
+    if (window.MindLinkCamera) MindLinkCamera.init();
     MindLinkReflection.initListeners();
 
     // ── OAuth コールバック振り分け ──
@@ -292,6 +294,15 @@ const MindLinkApp = (() => {
     return actualTheme;
   }
 
+  function applyColorTheme() {
+    const settings = MindLinkStorage.getSettings();
+    const colorTheme = settings.colorTheme || 'default';
+    document.documentElement.setAttribute('data-color-theme', colorTheme);
+    document.querySelectorAll('.color-theme-option').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.colorThemeOption === colorTheme);
+    });
+  }
+
   function initThemeWatcher() {
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
       const settings = MindLinkStorage.getSettings();
@@ -416,6 +427,11 @@ const MindLinkApp = (() => {
       btn.classList.toggle('active', btn.dataset.themeOption === settings.theme);
     });
 
+    // カラーテーマオプション
+    document.querySelectorAll('.color-theme-option').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.colorThemeOption === (settings.colorTheme || 'default'));
+    });
+
     // プロフィールタブ
     const uName = document.getElementById('setting-user-name');
     const uBio = document.getElementById('setting-user-bio');
@@ -446,6 +462,8 @@ const MindLinkApp = (() => {
     if (gClientId) gClientId.value = settings.googleClientId || '';
     const gClientSecret = document.getElementById('setting-google-client-secret');
     if (gClientSecret) gClientSecret.value = settings.googleClientSecret || '';
+    const gSearchEngineId = document.getElementById('setting-search-engine-id');
+    if (gSearchEngineId) gSearchEngineId.value = settings.searchEngineId || '';
 
     // Spotify連携
     const spotifyClientId = document.getElementById('setting-spotify-client-id');
@@ -478,9 +496,10 @@ const MindLinkApp = (() => {
     const summaryModel = document.getElementById('setting-summary-model')?.value;
     const googleClientId = document.getElementById('setting-google-client-id')?.value.trim();
     const googleClientSecret = document.getElementById('setting-google-client-secret')?.value.trim();
+    const searchEngineId = document.getElementById('setting-search-engine-id')?.value.trim();
     const spotifyClientId = document.getElementById('setting-spotify-client-id')?.value.trim();
 
-    MindLinkStorage.updateSettings({ temperature, maxTokens, autoLockMinutes, fontSize, summaryModel, googleClientId, googleClientSecret, spotifyClientId });
+    MindLinkStorage.updateSettings({ temperature, maxTokens, autoLockMinutes, fontSize, summaryModel, googleClientId, googleClientSecret, searchEngineId, spotifyClientId });
     MindLinkAuth.resetLockTimer();
     showToast('設定を保存しました');
   }
@@ -860,6 +879,15 @@ const MindLinkApp = (() => {
       });
     });
 
+    // カラーテーマオプション
+    document.querySelectorAll('.color-theme-option').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const colorTheme = btn.dataset.colorThemeOption;
+        MindLinkStorage.updateSettings({ colorTheme });
+        applyColorTheme();
+      });
+    });
+
     // プロフィール設定
     document.getElementById('user-avatar-file')?.addEventListener('change', async (e) => {
       const file = e.target.files[0];
@@ -1060,6 +1088,9 @@ const MindLinkApp = (() => {
     document.getElementById('setting-google-client-secret')?.addEventListener('input', (e) => {
       MindLinkStorage.updateSettings({ googleClientSecret: e.target.value.trim() });
     });
+    document.getElementById('setting-search-engine-id')?.addEventListener('input', (e) => {
+      MindLinkStorage.updateSettings({ searchEngineId: e.target.value.trim() });
+    });
 
     // ── Spotify連携 ──
     document.getElementById('btn-spotify-login')?.addEventListener('click', () => {
@@ -1221,6 +1252,7 @@ const MindLinkApp = (() => {
     openSidebar,
     closeSidebar,
     applyTheme,
+    applyColorTheme,
     resizeImageToBase64,
   };
 })();

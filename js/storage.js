@@ -10,10 +10,12 @@ const MindLinkStorage = (() => {
   
   // ── IndexedDB Helper (Stability for large RAG data) ──
   const DB_NAME = 'MindLinkDB';
-  const DB_VERSION = 3;
+  const DB_VERSION = 4;
   const STORE_NAME = 'reflections';
   const TOKEN_STORE = 'secure_tokens';
   const DAILY_SUMMARY_STORE = 'daily_summary';
+  const LIKED_MESSAGES_STORE = 'likedMessages';
+  const LIKED_STYLE_SUMMARIES_STORE = 'likedStyleSummaries';
   let _db = null;
 
   async function openDB() {
@@ -30,6 +32,12 @@ const MindLinkStorage = (() => {
         }
         if (!db.objectStoreNames.contains(DAILY_SUMMARY_STORE)) {
           db.createObjectStore(DAILY_SUMMARY_STORE, { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains(LIKED_MESSAGES_STORE)) {
+          db.createObjectStore(LIKED_MESSAGES_STORE, { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains(LIKED_STYLE_SUMMARIES_STORE)) {
+          db.createObjectStore(LIKED_STYLE_SUMMARIES_STORE, { keyPath: 'date' });
         }
       };
       request.onsuccess = (e) => { _db = e.target.result; resolve(_db); };
@@ -207,6 +215,7 @@ const MindLinkStorage = (() => {
     maxTokens: 8192,
     autoLockMinutes: 15,
     theme: 'system',
+    colorTheme: 'default',
     fontSize: 14,
     encryptedApiKey: null,
     encryptedGoogleServicesApiKey: null,
@@ -583,6 +592,98 @@ const MindLinkStorage = (() => {
     });
   }
 
+  // ── Liked Messages & Style Summaries ──
+
+  async function addLikedMessage(msg) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(LIKED_MESSAGES_STORE, 'readwrite');
+      const store = tx.objectStore(LIKED_MESSAGES_STORE);
+      const getReq = store.get(msg.id);
+      getReq.onsuccess = () => {
+        const existing = getReq.result;
+        const updated = existing
+          ? { ...existing, likeCount: existing.likeCount + 1 }
+          : { id: msg.id, content: msg.content, likeCount: 1, timestamp: new Date().toISOString() };
+        const putReq = store.put(updated);
+        putReq.onsuccess = () => resolve(updated);
+        putReq.onerror = () => reject(putReq.error);
+      };
+      getReq.onerror = () => reject(getReq.error);
+    });
+  }
+
+  async function getLikedMessages() {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(LIKED_MESSAGES_STORE, 'readonly');
+      const store = tx.objectStore(LIKED_MESSAGES_STORE);
+      const req = store.getAll();
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function clearLikedMessages() {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(LIKED_MESSAGES_STORE, 'readwrite');
+      const store = tx.objectStore(LIKED_MESSAGES_STORE);
+      const req = store.clear();
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function saveLikedStyleSummary(obj) {
+    // obj: { date: 'YYYY-MM-DD', summary: string }
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(LIKED_STYLE_SUMMARIES_STORE, 'readwrite');
+      const store = tx.objectStore(LIKED_STYLE_SUMMARIES_STORE);
+      const req = store.put(obj);
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function getLikedStyleSummaries() {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(LIKED_STYLE_SUMMARIES_STORE, 'readonly');
+      const store = tx.objectStore(LIKED_STYLE_SUMMARIES_STORE);
+      const req = store.getAll();
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  // 重みが threshold 以下の likedStyleSummaries を IndexedDB から削除
+  async function pruneOldLikedStyleSummaries(threshold = 0.09) {
+    const summaries = await getLikedStyleSummaries();
+    if (!summaries || summaries.length === 0) return;
+    const now = Date.now();
+    const toDelete = summaries.filter(s => {
+      const weight = 1 / ((now - new Date(s.date)) / 86400000 + 1);
+      return weight <= threshold;
+    });
+    if (toDelete.length === 0) return;
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(LIKED_STYLE_SUMMARIES_STORE, 'readwrite');
+      const store = tx.objectStore(LIKED_STYLE_SUMMARIES_STORE);
+      let completed = 0;
+      for (const s of toDelete) {
+        const req = store.delete(s.date);
+        req.onsuccess = () => {
+          completed++;
+          if (completed === toDelete.length) resolve(toDelete.length);
+        };
+        req.onerror = () => reject(req.error);
+      }
+    });
+  }
+
   // ── Final Return ──
 
   return {
@@ -592,6 +693,8 @@ const MindLinkStorage = (() => {
     getThreads, setThreads, getThread, saveThread, deleteThread,
     getMessages, setMessages, addMessage,
     getMemories, setMemories, addMemory, deleteMemory, updateMemory,
+    addLikedMessage, getLikedMessages, clearLikedMessages,
+    saveLikedStyleSummary, getLikedStyleSummaries, pruneOldLikedStyleSummaries,
     getPersonas, setPersonas, savePersona, deletePersona, getPersona, getDefaultPersona,
     getActivePersonaId, setActivePersonaId,
     getGlobalContext, setGlobalContext,

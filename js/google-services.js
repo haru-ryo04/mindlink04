@@ -433,6 +433,19 @@ const MindLinkGoogleServices = (() => {
       description: "Spotifyの現在再生中の曲情報を取得します。「今何聴いてる？」などに自律的に使用。",
       parameters: { type: "object", properties: {} }
     },
+    // ── Google Custom Search ──
+    {
+      name: "custom_search",
+      description: "特定のウェブサイトやドメインを指定して検索します。ユーザーが「〇〇サイトで調べて」「公式サイトを検索して」「〇〇のページを探して」など、検索先のサイトを明示した場合のみ使用してください。一般的なウェブ検索はgoogleSearchグラウンディングで行われるため、このツールは使わないでください。",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "検索クエリ（日本語または英語）" },
+          site: { type: "string", description: "検索対象のドメインまたはURL（例: apple.com、docs.python.org）。特定サイト指定時のみ入力。" }
+        },
+        required: ["query"]
+      }
+    },
   ];
 
   /**
@@ -512,6 +525,34 @@ const MindLinkGoogleServices = (() => {
       case "spotify_get_current_track":
         if (!window.MindLinkSpotify) return { error: 'Spotifyモジュールが読み込まれていません' };
         return await MindLinkSpotify.getCurrentTrack() || { message: '現在再生中の曲はありません' };
+      // ── Google Custom Search ──
+      case "custom_search": {
+        const apiKey = await MindLinkAuth.getApiKey('google_services');
+        if (!apiKey) return { error: 'Googleツール用APIキーが設定されていません。設定画面のAPIタブで登録してください。' };
+        const cx = MindLinkStorage.getSettings().searchEngineId;
+        if (!cx) return { error: '検索エンジンID (cx) が設定されていません。設定画面のGoogle連携タブで登録してください。' };
+        let searchUrl = `https://www.googleapis.com/customsearch/v1?key=${encodeURIComponent(apiKey)}&cx=${encodeURIComponent(cx)}&q=${encodeURIComponent(args.query)}&num=5&hl=ja`;
+        if (args.site) {
+          searchUrl += `&siteSearch=${encodeURIComponent(args.site)}&siteSearchFilter=i`;
+        }
+        const searchResp = await fetch(searchUrl);
+        if (!searchResp.ok) {
+          const errData = await searchResp.json().catch(() => ({}));
+          return { error: 'Custom Search APIエラー: ' + (errData.error?.message || searchResp.statusText) };
+        }
+        const searchData = await searchResp.json();
+        const items = searchData.items || [];
+        if (items.length === 0) return { message: '検索結果が見つかりませんでした。', query: args.query, site: args.site || null };
+        return {
+          query: args.query,
+          site: args.site || null,
+          results: items.map(item => ({
+            title: item.title,
+            snippet: item.snippet,
+            link: item.link
+          }))
+        };
+      }
       default: throw new Error(`Unknown function: ${name}`);
     }
   }
