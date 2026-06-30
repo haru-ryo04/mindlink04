@@ -13,13 +13,22 @@ const MindLinkThreads = (() => {
   function getCurrentThreadId() { return _currentThreadId; }
   function setCurrentThreadId(id) { _currentThreadId = id; }
 
+  // UIで選択中のモデルを一時保持（スレッド未作成でも選択を覚えておく）
+  // createThread がこの値を使うため、新規チャットでも選択が確実に反映される。
+  function getPendingModel() {
+    return MindLinkStorage.get('pendingModel', 'gemini-3.5-flash');
+  }
+  function setPendingModel(model) {
+    return MindLinkStorage.set('pendingModel', model);
+  }
+
   // スレッド作成
   function createThread(personaId) {
     const thread = {
       id: generateId(),
       title: '新しいチャット',
       personaId: personaId || MindLinkStorage.getActivePersonaId(),
-      model: 'gemini-3.5-flash',
+      model: getPendingModel(),
       isPinned: false,
       isArchived: false,
       createdAt: Date.now(),
@@ -44,21 +53,60 @@ const MindLinkThreads = (() => {
     MindLinkStorage.saveThread({ ...thread, isPinned: !thread.isPinned, updatedAt: Date.now() });
   }
 
-  // アーカイブ
-  function archiveThread(id) {
+  // アーカイブ：会話本文を localStorage → IndexedDB倉庫 へ移動して容量を空ける。
+  // データが消える瞬間が無いよう「IDBに書く→検証→メタ更新→最後にlocalStorage削除」の順。
+  async function archiveThread(id) {
     const thread = MindLinkStorage.getThread(id);
-    if (!thread) return;
-    MindLinkStorage.saveThread({ ...thread, isArchived: true, updatedAt: Date.now() });
-    if (_currentThreadId === id) {
-      _currentThreadId = null;
+    if (!thread) return false;
+    if (thread.isArchived) return true; // 既にアーカイブ済み
+    try {
+      // ① localStorage から会話本文を読む
+      const messages = MindLinkStorage.getMessages(id);
+      // ② IndexedDB に書き込む
+      await MindLinkStorage.idbPutArchivedMessages(id, messages);
+      // ③ 書き込めたか検証（読み返して件数一致を確認）
+      const check = await MindLinkStorage.idbGetArchivedMessages(id);
+      if (check === null || check.length !== messages.length) {
+        throw new Error('IndexedDBへの書き込み検証に失敗');
+      }
+      // ④⑤ メタ情報を isArchived: true に更新
+      MindLinkStorage.saveThread({ ...thread, isArchived: true, updatedAt: Date.now() });
+      // ⑥ 最後に localStorage の元データを削除（ここで初めて容量が空く）
+      MindLinkStorage.remove('messages_' + id);
+      if (_currentThreadId === id) _currentThreadId = null;
+      return true;
+    } catch (e) {
+      console.error('[MindLink] archiveThread failed:', e);
+      if (window.MindLinkApp) window.MindLinkApp.showToast('アーカイブに失敗しました');
+      return false;
     }
   }
 
-  // アーカイブから復元
-  function restoreThread(id) {
+  // アーカイブから復元：会話本文を IndexedDB倉庫 → localStorage へ書き戻す。
+  // localStorageが満杯で書き戻せない場合は中止し、アーカイブのまま維持する。
+  async function restoreThread(id) {
     const thread = MindLinkStorage.getThread(id);
-    if (!thread) return;
-    MindLinkStorage.saveThread({ ...thread, isArchived: false, updatedAt: Date.now() });
+    if (!thread) return false;
+    if (!thread.isArchived) return true;
+    try {
+      // ① IDB倉庫から会話本文を読む（無ければlocalStorageフォールバック）
+      const messages = await MindLinkStorage.getArchivedMessages(id);
+      // ② localStorage に書き戻す（満杯なら set は false を返す）
+      const ok = MindLinkStorage.setMessages(id, messages || []);
+      if (!ok) {
+        if (window.MindLinkApp) window.MindLinkApp.showToast('容量不足で復元できません。アーカイブのまま維持します');
+        return false;
+      }
+      // ③ メタ情報を isArchived: false に更新
+      MindLinkStorage.saveThread({ ...thread, isArchived: false, updatedAt: Date.now() });
+      // ④ IDB倉庫側を削除
+      await MindLinkStorage.idbDeleteArchivedMessages(id);
+      return true;
+    } catch (e) {
+      console.error('[MindLink] restoreThread failed:', e);
+      if (window.MindLinkApp) window.MindLinkApp.showToast('復元に失敗しました');
+      return false;
+    }
   }
 
   // 削除
@@ -233,12 +281,13 @@ const MindLinkThreads = (() => {
       });
       div.querySelector('.archive-item-body').style.cursor = 'pointer';
       
-      div.querySelector('.btn-restore').addEventListener('click', (e) => {
+      div.querySelector('.btn-restore').addEventListener('click', async (e) => {
         e.stopPropagation();
-        restoreThread(t.id);
+        const ok = await restoreThread(t.id);
         renderArchiveList();
         renderThreadList();
-        if (window.MindLinkApp) window.MindLinkApp.showToast('チャットを復元しました');
+        // 失敗時は restoreThread 内で個別のトーストを出すため、成功時のみ表示
+        if (ok && window.MindLinkApp) window.MindLinkApp.showToast('チャットを復元しました');
       });
       div.querySelector('.memory-delete-btn').addEventListener('click', (e) => {
         e.stopPropagation();
@@ -254,6 +303,8 @@ const MindLinkThreads = (() => {
     generateId,
     getCurrentThreadId,
     setCurrentThreadId,
+    getPendingModel,
+    setPendingModel,
     createThread,
     updateThreadTitle,
     togglePin,

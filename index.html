@@ -5,10 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="description" content="MindLink - 個人専用AIチャットアプリ">
   <meta name="theme-color" content="#0a0f1e" id="theme-color-meta">
-  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="MindLink">
-  <script>const CACHE_NAME = 'mindlink-v33';</script>
+  <script>const CACHE_NAME = 'mindlink-v42';</script>
   <title>MindLink</title>
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
@@ -132,6 +133,47 @@
       box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
       background: var(--color-surface);
     }
+
+    /* ── Fitness Styles ── */
+    .fitness-card { background: var(--color-surface-2); border: 1px solid var(--color-border); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+    .fitness-section-title { font-size: 0.9rem; font-weight: 600; margin-bottom: 10px; }
+    .fitness-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .fitness-row label { font-size: 0.8rem; opacity: 0.8; }
+    .fitness-row input { flex: 1; min-width: 100px; }
+    .fitness-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    .fitness-field { display: flex; flex-direction: column; gap: 4px; }
+    .fitness-field label { font-size: 0.75rem; opacity: 0.75; }
+    #fitness-body input, #fitness-body select { width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--color-border); background: var(--color-surface); color: inherit; font-size: 0.9rem; box-sizing: border-box; }
+    #fitness-body input[readonly] { opacity: 0.65; }
+    .fitness-subcard { border: 1px solid var(--color-border); border-radius: 10px; padding: 10px; margin-bottom: 10px; background: var(--color-surface); }
+    .fitness-remove-btn { margin-top: 8px; background: none; border: 1px solid var(--color-border); border-radius: 6px; padding: 4px 10px; font-size: 0.75rem; cursor: pointer; color: inherit; opacity: 0.7; }
+    .fitness-remove-btn:hover { color: #ef4444; border-color: #ef4444; opacity: 1; }
+    .fitness-persona { display: flex; align-items: center; gap: 10px; }
+    .fitness-persona-text { flex: 1; font-size: 0.88rem; line-height: 1.5; }
+    .fitness-persona-emoji { font-size: 1.4rem; }
+    .fitness-chart-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+    .fitness-range-buttons { display: flex; gap: 4px; }
+    .fitness-range-buttons button { padding: 4px 10px; border-radius: 6px; border: 1px solid var(--color-border); background: transparent; color: inherit; font-size: 0.75rem; cursor: pointer; }
+    .fitness-range-buttons button.active { background: var(--color-accent, #6366f1); color: #fff; border-color: var(--color-accent, #6366f1); }
+    .fitness-empty { text-align: center; opacity: 0.6; font-size: 0.85rem; padding: 20px 0; }
+    .fitness-history-list { display: flex; flex-direction: column; }
+    .fitness-acc-item { border: 1px solid var(--color-border); border-radius: 10px; margin-bottom: 10px; overflow: hidden; background: var(--color-surface-2); }
+    .fitness-acc-header { display: flex; align-items: center; gap: 8px; padding: 12px; cursor: pointer; }
+    .fitness-acc-date { font-size: 0.85rem; font-weight: 600; }
+    .fitness-acc-summary { flex: 1; font-size: 0.8rem; opacity: 0.75; }
+    .fitness-acc-chevron { transition: transform 0.25s; opacity: 0.6; flex-shrink: 0; }
+    .fitness-acc-item.active .fitness-acc-chevron { transform: rotate(180deg); }
+    .fitness-acc-body { max-height: 0; overflow: hidden; transition: max-height 0.3s ease, padding 0.3s ease; padding: 0 12px; }
+    .fitness-acc-item.active .fitness-acc-body { max-height: 1400px; padding: 0 12px 12px; }
+    .fitness-detail-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin-bottom: 8px; }
+    .fitness-detail-grid > div { display: flex; justify-content: space-between; font-size: 0.8rem; background: var(--color-surface); border-radius: 6px; padding: 4px 8px; }
+    .fitness-detail-title { font-size: 0.8rem; font-weight: 600; margin: 6px 0 2px; opacity: 0.8; }
+    .fitness-detail-line { font-size: 0.8rem; line-height: 1.5; }
+    .fitness-detail-persona { margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--color-sidebar-hover); font-size: 0.83rem; line-height: 1.5; }
+    .fitness-detail-actions { display: flex; gap: 8px; margin-top: 10px; }
+    .fitness-del:hover { color: #ef4444; }
+    .fitness-menu-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--color-border); font-size: 0.85rem; }
+    .fitness-menu-actions { display: flex; gap: 6px; }
   </style>
   <!-- Google Services Identity (GSI) Library -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -350,6 +392,12 @@
             <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
           </svg>
           <span>記憶ノート</span>
+        </button>
+        <button class="sidebar-footer-btn" id="btn-fitness" title="フィットネス">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+            <path d="m6.5 6.5 11 11"/><path d="m21 21-1-1"/><path d="m3 3 1 1"/><path d="m18 22 4-4"/><path d="m2 6 4-4"/><path d="m3 10 7-7"/><path d="m14 21 7-7"/>
+          </svg>
+          <span>フィットネス</span>
         </button>
       </div>
       <div class="sidebar-version-tag">MindLink v24</div>
@@ -680,9 +728,9 @@
           <div class="setting-group" style="padding-top: 15px; border-top: 1px solid var(--color-border);">
             <label class="setting-label">📅 自己省察の要約モデル</label>
             <select class="setting-select" id="setting-summary-model">
+              <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash-Lite (最軽量)</option>
               <option value="gemini-3.5-flash">Gemini 3.5 Flash (最新・高速)</option>
               <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (高精度・思索的)</option>
-              <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
             </select>
             <p class="setting-hint">一日の振り返りや記憶の定着に使用するモデルを選択します。</p>
           </div>
@@ -880,6 +928,13 @@
             <label class="setting-label">PINコードを変更</label>
             <p class="setting-hint">現在のPINを確認してから新しいPINを設定します</p>
             <button class="btn-secondary" id="btn-change-pin">PINを変更する</button>
+          </div>
+          <div class="setting-group">
+            <label class="setting-label">データ管理</label>
+            <p class="setting-hint">アーカイブしたスレッドをまとめてファイルに書き出し／読み込みします（バックアップ・機種変用）。読み込んだスレッドはアーカイブに入ります。</p>
+            <button class="btn-secondary" id="btn-export-archive">📥 アーカイブを一括エクスポート</button>
+            <button class="btn-secondary" id="btn-import-archive">📤 アーカイブを読み込む</button>
+            <input type="file" id="input-import-archive" accept="application/json,.json" style="display: none;">
           </div>
           <div class="setting-group danger-zone">
             <label class="setting-label" style="color: var(--color-danger)">危険な操作</label>
@@ -1191,6 +1246,25 @@
   </div>
 
   <!-- Reflection Note Modal (AIの記憶ノート) -->
+  <!-- Fitness Modal -->
+  <div class="modal-overlay" id="fitness-modal">
+    <div class="modal memory-modal-content">
+      <div class="modal-header">
+        <h2>フィットネス</h2>
+        <button class="btn-icon modal-close" data-modal="fitness-modal">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div id="fitness-body" style="max-height: 70vh; overflow-y: auto;">
+          <!-- Fitness UI dynamically inserted by js/fitness.js -->
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-overlay" id="reflection-modal">
     <div class="modal memory-modal-content">
       <div class="modal-header">
@@ -1299,23 +1373,24 @@
   <!-- Scripts (order matters) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-  <script src="js/config.js?v=30"></script>
-  <script src="js/storage.js?v=30"></script>
-  <script src="js/crypto.js?v=30"></script>
-  <script src="js/auth.js?v=30"></script>
-  <script src="js/api.js?v=30"></script>
-  <script src="js/threads.js?v=30"></script>
-  <script src="js/memory.js?v=30"></script>
-  <script src="js/personas.js?v=30"></script>
-  <script src="js/chat.js?v=30"></script>
-  <script src="js/google-auth.js?v=30"></script>
-  <script src="js/google-services.js?v=30"></script>
-  <script src="js/rag.js?v=30"></script>
-  <script src="js/reflection.js?v=30"></script>
-  <script src="js/calendar.js?v=30"></script>
-  <script src="js/spotify-auth.js?v=31"></script>
-  <script src="js/spotify.js?v=31"></script>
-  <script src="js/camera.js?v=30"></script>
-  <script src="js/app.js?v=31"></script>
+  <script src="js/config.js?v=42"></script>
+  <script src="js/storage.js?v=42"></script>
+  <script src="js/crypto.js?v=42"></script>
+  <script src="js/auth.js?v=42"></script>
+  <script src="js/api.js?v=42"></script>
+  <script src="js/threads.js?v=42"></script>
+  <script src="js/memory.js?v=42"></script>
+  <script src="js/personas.js?v=42"></script>
+  <script src="js/chat.js?v=42"></script>
+  <script src="js/google-auth.js?v=42"></script>
+  <script src="js/google-services.js?v=42"></script>
+  <script src="js/rag.js?v=42"></script>
+  <script src="js/reflection.js?v=42"></script>
+  <script src="js/calendar.js?v=42"></script>
+  <script src="js/spotify-auth.js?v=42"></script>
+  <script src="js/spotify.js?v=42"></script>
+  <script src="js/camera.js?v=42"></script>
+  <script src="js/fitness.js?v=42"></script>
+  <script src="js/app.js?v=42"></script>
 </body>
 </html>

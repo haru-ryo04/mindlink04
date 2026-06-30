@@ -1490,6 +1490,9 @@ body {
   --color-sidebar:     #f2f0fb;
   --color-border:      #c8c0f0;
   --color-border-light: #e4e0f8;
+  --color-user-bubble: #ece8fc;
+  --color-user-border: #c4b8f0;
+  --color-ai-border:   #c8c0f0;
 }
 [data-color-theme="default"][data-theme="dark"] {
   --color-accent:      #9d93e0;
@@ -1505,6 +1508,9 @@ body {
   --color-sidebar:     #0a0b20;
   --color-border:      #3d3568;
   --color-border-light: #2a2450;
+  --color-user-bubble: #1a1740;
+  --color-user-border: #3d3580;
+  --color-ai-border:   #3d3568;
 }
 
 /* ── Mauve Theme ── */
@@ -1522,6 +1528,9 @@ body {
   --color-sidebar:     #f7f0f9;
   --color-border:      #d4b8d7;
   --color-border-light: #ecdcee;
+  --color-user-bubble: #f5edf7;
+  --color-user-border: #d4a8d8;
+  --color-ai-border:   #d4b8d7;
 }
 [data-color-theme="mauve"][data-theme="dark"] {
   --color-accent:      #c09ac3;
@@ -1537,6 +1546,9 @@ body {
   --color-sidebar:     #110e18;
   --color-border:      #4a2e4d;
   --color-border-light: #3a2240;
+  --color-user-bubble: #2a1830;
+  --color-user-border: #6a3d70;
+  --color-ai-border:   #4a2e4d;
 }
 
 /* ── Sage Theme ── */
@@ -1554,6 +1566,9 @@ body {
   --color-sidebar:     #edf5ef;
   --color-border:      #b0c8b8;
   --color-border-light: #d8eadc;
+  --color-user-bubble: #e8f3ea;
+  --color-user-border: #a8c8b0;
+  --color-ai-border:   #b0c8b8;
 }
 [data-color-theme="sage"][data-theme="dark"] {
   --color-accent:      #92b89a;
@@ -1569,6 +1584,9 @@ body {
   --color-sidebar:     #0b140e;
   --color-border:      #2a4230;
   --color-border-light: #1e3824;
+  --color-user-bubble: #122018;
+  --color-user-border: #3a6844;
+  --color-ai-border:   #2a4230;
 }
 
 /* ── Amber Theme ── */
@@ -1586,6 +1604,9 @@ body {
   --color-sidebar:     #f8f2e8;
   --color-border:      #d4b89a;
   --color-border-light: #eeddd0;
+  --color-user-bubble: #f8f0e4;
+  --color-user-border: #d4a878;
+  --color-ai-border:   #d4b89a;
 }
 [data-color-theme="amber"][data-theme="dark"] {
   --color-accent:      #cc9c78;
@@ -1601,4 +1622,7 @@ body {
   --color-sidebar:     #160e06;
   --color-border:      #4a3020;
   --color-border-light: #3a2410;
+  --color-user-bubble: #2a1c0e;
+  --color-user-border: #6a4228;
+  --color-ai-border:   #4a3020;
 }

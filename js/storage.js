@@ -10,12 +10,17 @@ const MindLinkStorage = (() => {
   
   // ── IndexedDB Helper (Stability for large RAG data) ──
   const DB_NAME = 'MindLinkDB';
-  const DB_VERSION = 4;
+  const DB_VERSION = 6;
   const STORE_NAME = 'reflections';
   const TOKEN_STORE = 'secure_tokens';
   const DAILY_SUMMARY_STORE = 'daily_summary';
   const LIKED_MESSAGES_STORE = 'likedMessages';
   const LIKED_STYLE_SUMMARIES_STORE = 'likedStyleSummaries';
+  const FITNESS_LOGS_STORE = 'fitnessLogs';
+  const FITNESS_MENUS_STORE = 'fitnessMenus';
+  // アーカイブ済みスレッドの会話本文を保管する倉庫（localStorage容量対策）
+  // keyPath は threadId（= スレッドID）。値は { id, messages: [...] }。
+  const ARCHIVED_MESSAGES_STORE = 'archivedMessages';
   let _db = null;
 
   async function openDB() {
@@ -38,6 +43,15 @@ const MindLinkStorage = (() => {
         }
         if (!db.objectStoreNames.contains(LIKED_STYLE_SUMMARIES_STORE)) {
           db.createObjectStore(LIKED_STYLE_SUMMARIES_STORE, { keyPath: 'date' });
+        }
+        if (!db.objectStoreNames.contains(FITNESS_LOGS_STORE)) {
+          db.createObjectStore(FITNESS_LOGS_STORE, { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains(FITNESS_MENUS_STORE)) {
+          db.createObjectStore(FITNESS_MENUS_STORE, { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains(ARCHIVED_MESSAGES_STORE)) {
+          db.createObjectStore(ARCHIVED_MESSAGES_STORE, { keyPath: 'id' });
         }
       };
       request.onsuccess = (e) => { _db = e.target.result; resolve(_db); };
@@ -224,7 +238,7 @@ const MindLinkStorage = (() => {
     userBio: '',
     googleClientId: '',
     googleClientSecret: '',
-    summaryModel: 'gemini-3.5-flash',
+    summaryModel: 'gemini-3.1-flash-lite',
   };
 
   function getSettings() {
@@ -262,6 +276,124 @@ const MindLinkStorage = (() => {
     const threads = getThreads().filter(t => t.id !== id);
     setThreads(threads);
     remove('messages_' + id);
+    // アーカイブ倉庫（IndexedDB）側にも本文が残っている場合があるため掃除（best-effort）
+    idbDeleteArchivedMessages(id).catch(() => {});
+  }
+
+  // ── アーカイブ会話の IndexedDB 倉庫（localStorage容量対策） ──
+  // 会話本文を { id: threadId, messages: [...] } として保管する。
+  async function idbPutArchivedMessages(threadId, messages) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(ARCHIVED_MESSAGES_STORE, 'readwrite');
+      const store = tx.objectStore(ARCHIVED_MESSAGES_STORE);
+      const req = store.put({ id: threadId, messages: messages || [] });
+      req.onsuccess = () => resolve(true);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  async function idbGetArchivedMessages(threadId) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(ARCHIVED_MESSAGES_STORE, 'readonly');
+      const store = tx.objectStore(ARCHIVED_MESSAGES_STORE);
+      const req = store.get(threadId);
+      req.onsuccess = () => resolve(req.result ? (req.result.messages || []) : null);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  async function idbDeleteArchivedMessages(threadId) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(ARCHIVED_MESSAGES_STORE, 'readwrite');
+      const store = tx.objectStore(ARCHIVED_MESSAGES_STORE);
+      const req = store.delete(threadId);
+      req.onsuccess = () => resolve(true);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  // アーカイブ済みスレッドの会話本文を取得する（移行後はIDB、未移行はlocalStorageから）。
+  // 移行の過渡期でも確実に読めるよう、IDB→localStorage の順でフォールバックする。
+  async function getArchivedMessages(threadId) {
+    try {
+      const fromIdb = await idbGetArchivedMessages(threadId);
+      if (fromIdb !== null) return fromIdb;
+    } catch (e) {
+      console.warn('[MindLink] idbGetArchivedMessages failed, fallback to localStorage:', e);
+    }
+    return getMessages(threadId);
+  }
+
+  // localStorage にまだ会話本文が残っているアーカイブ済みスレッドのID一覧を返す（移行対象の検出用）。
+  function getUnmigratedArchivedThreadIds() {
+    return getThreads()
+      .filter(t => t && t.isArchived && localStorage.getItem(key('messages_' + t.id)) !== null)
+      .map(t => t.id);
+  }
+
+  // ── スレッドのエクスポート（読み取りのみ・既存データは一切変更しない） ──
+  // アーカイブ済み（isArchived: true）のスレッドを、会話本文ごと1つのオブジェクトに
+  // まとめて返す。会話本文は移行後はIndexedDBから、未移行はlocalStorageから取得する。
+  async function exportArchivedThreads() {
+    const archived = getThreads().filter(t => t && t.isArchived);
+    const threads = [];
+    for (const t of archived) {
+      const messages = await getArchivedMessages(t.id);
+      threads.push({ ...t, messages: messages || [] });
+    }
+    return {
+      format: 'mindlink-archive-export',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      appVersion: (typeof CACHE_NAME !== 'undefined') ? CACHE_NAME : 'unknown',
+      threadCount: threads.length,
+      threads,
+    };
+  }
+
+  // ── アーカイブの一括インポート ──
+  // エクスポートしたJSON（exportArchivedThreads の出力）を取り込む。
+  // ・取り込んだスレッドは必ずアーカイブ状態（isArchived: true）で入る
+  // ・会話本文は IndexedDB倉庫へ、メタ情報は localStorage の threads へ
+  // ・既存と同じスレッドIDは取り込まずスキップ（A案：重複・上書き防止）
+  // 戻り値: { total, imported, skipped }
+  async function importArchivedThreads(data) {
+    if (!data || data.format !== 'mindlink-archive-export' || !Array.isArray(data.threads)) {
+      throw new Error('対応していないファイル形式です');
+    }
+    const existingIds = new Set(getThreads().map(t => t.id));
+    let imported = 0;
+    let skipped = 0;
+    for (const entry of data.threads) {
+      if (!entry || typeof entry !== 'object' || !entry.id) { skipped++; continue; }
+      const id = entry.id;
+      if (existingIds.has(id)) { skipped++; continue; } // 重複はスキップ
+      const messages = Array.isArray(entry.messages) ? entry.messages : [];
+      try {
+        // ① 会話本文を IndexedDB倉庫へ書き込み → 検証
+        await idbPutArchivedMessages(id, messages);
+        const check = await idbGetArchivedMessages(id);
+        if (check === null || check.length !== messages.length) {
+          throw new Error('IndexedDBへの書き込み検証に失敗');
+        }
+        // ② メタ情報を threads へ追加（messagesは除外し、必ずアーカイブ状態に固定）
+        const { messages: _omit, ...meta } = entry;
+        saveThread({
+          ...meta,
+          id,
+          isArchived: true,
+          createdAt: meta.createdAt || Date.now(),
+          updatedAt: meta.updatedAt || Date.now(),
+        });
+        existingIds.add(id);
+        imported++;
+      } catch (e) {
+        console.error('[MindLink] importArchivedThreads failed for', id, e);
+        skipped++;
+      }
+    }
+    return { total: data.threads.length, imported, skipped };
   }
 
   // ── Messages ──
@@ -635,53 +767,92 @@ const MindLinkStorage = (() => {
     });
   }
 
-  async function saveLikedStyleSummary(obj) {
-    // obj: { date: 'YYYY-MM-DD', summary: string }
+  // ── Fitness Logs（日次フィットネス記録・1日1件・同日上書き） ──
+  async function getFitnessLogs() {
     const db = await openDB();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(LIKED_STYLE_SUMMARIES_STORE, 'readwrite');
-      const store = tx.objectStore(LIKED_STYLE_SUMMARIES_STORE);
-      const req = store.put(obj);
-      req.onsuccess = () => resolve();
+      const tx = db.transaction(FITNESS_LOGS_STORE, 'readonly');
+      const req = tx.objectStore(FITNESS_LOGS_STORE).getAll();
+      req.onsuccess = () => resolve(req.result || []);
       req.onerror = () => reject(req.error);
     });
   }
 
-  async function getLikedStyleSummaries() {
+  async function getFitnessLogByDate(date) {
+    const logs = await getFitnessLogs();
+    return logs.find(l => l.date === date) || null;
+  }
+
+  async function saveFitnessLog(log) {
     const db = await openDB();
+    // 同日既存レコードがあれば id / createdAt を引き継いで上書き（1日1件）
+    const existing = await getFitnessLogByDate(log.date);
+    if (existing) {
+      log.id = existing.id;
+      log.createdAt = existing.createdAt;
+    } else {
+      log.id = log.id || 'fitness_' + Date.now();
+      log.createdAt = log.createdAt || Date.now();
+    }
+    log.updatedAt = Date.now();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(LIKED_STYLE_SUMMARIES_STORE, 'readonly');
-      const store = tx.objectStore(LIKED_STYLE_SUMMARIES_STORE);
-      const req = store.getAll();
-      req.onsuccess = () => resolve(req.result);
+      const tx = db.transaction(FITNESS_LOGS_STORE, 'readwrite');
+      const req = tx.objectStore(FITNESS_LOGS_STORE).put(log);
+      req.onsuccess = () => resolve(log);
       req.onerror = () => reject(req.error);
     });
   }
 
-  // 重みが threshold 以下の likedStyleSummaries を IndexedDB から削除
-  async function pruneOldLikedStyleSummaries(threshold = 0.09) {
-    const summaries = await getLikedStyleSummaries();
-    if (!summaries || summaries.length === 0) return;
-    const now = Date.now();
-    const toDelete = summaries.filter(s => {
-      const weight = 1 / ((now - new Date(s.date)) / 86400000 + 1);
-      return weight <= threshold;
-    });
-    if (toDelete.length === 0) return;
+  async function deleteFitnessLog(id) {
     const db = await openDB();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(LIKED_STYLE_SUMMARIES_STORE, 'readwrite');
-      const store = tx.objectStore(LIKED_STYLE_SUMMARIES_STORE);
-      let completed = 0;
-      for (const s of toDelete) {
-        const req = store.delete(s.date);
-        req.onsuccess = () => {
-          completed++;
-          if (completed === toDelete.length) resolve(toDelete.length);
-        };
-        req.onerror = () => reject(req.error);
-      }
+      const tx = db.transaction(FITNESS_LOGS_STORE, 'readwrite');
+      const req = tx.objectStore(FITNESS_LOGS_STORE).delete(id);
+      req.onsuccess = () => resolve(true);
+      req.onerror = () => reject(req.error);
     });
+  }
+
+  // ── Fitness Menus（登録済みメニュー：筋トレ/有酸素） ──
+  async function getFitnessMenus() {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(FITNESS_MENUS_STORE, 'readonly');
+      const req = tx.objectStore(FITNESS_MENUS_STORE).getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function saveFitnessMenu(menu) {
+    const db = await openDB();
+    menu.id = menu.id || 'menu_' + Date.now();
+    menu.createdAt = menu.createdAt || Date.now();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(FITNESS_MENUS_STORE, 'readwrite');
+      const req = tx.objectStore(FITNESS_MENUS_STORE).put(menu);
+      req.onsuccess = () => resolve(menu);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function deleteFitnessMenu(id) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(FITNESS_MENUS_STORE, 'readwrite');
+      const req = tx.objectStore(FITNESS_MENUS_STORE).delete(id);
+      req.onsuccess = () => resolve(true);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  // ── Fitness Profile（身長など基本情報・専用localStorageキー） ──
+  function getFitnessProfile() {
+    return get('fitnessProfile', { height: null });
+  }
+  function setFitnessProfile(partial) {
+    const current = getFitnessProfile();
+    return set('fitnessProfile', { ...current, ...partial });
   }
 
   // ── Final Return ──
@@ -691,10 +862,12 @@ const MindLinkStorage = (() => {
     getAuth, setAuth, isFirstRun,
     getSettings, setSettings, updateSettings,
     getThreads, setThreads, getThread, saveThread, deleteThread,
+    exportArchivedThreads, importArchivedThreads,
+    idbPutArchivedMessages, idbGetArchivedMessages, idbDeleteArchivedMessages,
+    getArchivedMessages, getUnmigratedArchivedThreadIds,
     getMessages, setMessages, addMessage,
     getMemories, setMemories, addMemory, deleteMemory, updateMemory,
     addLikedMessage, getLikedMessages, clearLikedMessages,
-    saveLikedStyleSummary, getLikedStyleSummaries, pruneOldLikedStyleSummaries,
     getPersonas, setPersonas, savePersona, deletePersona, getPersona, getDefaultPersona,
     getActivePersonaId, setActivePersonaId,
     getGlobalContext, setGlobalContext,
@@ -704,6 +877,9 @@ const MindLinkStorage = (() => {
     exportRAGData, importRAGData,
     getDailySummary, saveDailySummary, deleteDailySummary,
     getCalendarEvents, saveCalendarEvent, deleteCalendarEvent, updateCalendarEvent, getCalendarEventsForDate,
+    getFitnessLogs, getFitnessLogByDate, saveFitnessLog, deleteFitnessLog,
+    getFitnessMenus, saveFitnessMenu, deleteFitnessMenu,
+    getFitnessProfile, setFitnessProfile,
   };
 })();
 

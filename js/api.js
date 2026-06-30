@@ -22,7 +22,11 @@ const MindLinkAPI = (() => {
     const apiKey = await MindLinkAuth.getApiKey('gemini');
     if (!apiKey) throw new Error('APIキー未設定');
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${apiKey}`;
+    // Embedding は gemini-embedding-2 のみを使用する。
+    // 旧モデル(gemini-embedding-001)へのフォールバックは次元数が異なり、
+    // 保存済みベクトルと混在すると類似度計算が壊れるため行わない。
+    // 失敗時はエラーを投げ、呼び出し側(RAG)は空配列で受けてチャットを継続する。
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:embedContent?key=${apiKey}`;
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -32,21 +36,8 @@ const MindLinkAPI = (() => {
     });
 
     if (!response.ok) {
-      const fallbackUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${apiKey}`;
-      const fallbackResp = await fetch(fallbackUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          content: { parts: [{ text }] }
-        })
-      });
-      
-      if (!fallbackResp.ok) {
-        const err = await fallbackResp.json().catch(() => ({}));
-        throw new Error(err.error?.message || `Embedding Error (Status ${fallbackResp.status})`);
-      }
-      const data = await fallbackResp.json();
-      return data.embedding.values;
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error?.message || `Embedding Error (Status ${response.status})`);
     }
 
     const data = await response.json();
@@ -61,7 +52,7 @@ const MindLinkAPI = (() => {
     if (!apiKey) throw new Error('APIキー未設定');
 
     const settings = MindLinkStorage.getSettings();
-    const model = usePro ? 'gemini-2.5-pro' : (settings.summaryModel || 'gemini-2.5-flash');
+    const model = usePro ? 'gemini-3.1-flash-lite' : (settings.summaryModel || 'gemini-2.5-flash');
     const url = `${BASE_URL}/models/${model}:generateContent?key=${apiKey}`;
 
     const response = await fetch(url, {
@@ -77,12 +68,25 @@ const MindLinkAPI = (() => {
     });
 
     if (!response.ok) {
-      const err = await response.json();
-      throw new Error(err.error?.message || 'Summary Generation Error');
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error?.message || `要約生成エラー (HTTP ${response.status})`);
     }
 
     const data = await response.json();
-    return data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    if (!text) {
+      // HTTP 200 でも本文が空になるケース（セーフティブロック等）の原因を可視化する。
+      // ・promptFeedback.blockReason : 入力プロンプト自体がブロックされた
+      // ・candidates[0].finishReason : 出力が SAFETY / RECITATION / MAX_TOKENS 等で停止
+      const blockReason  = data?.promptFeedback?.blockReason;
+      const finishReason = data?.candidates?.[0]?.finishReason;
+      let detail;
+      if (blockReason)       detail = `入力がブロックされました (${blockReason})`;
+      else if (finishReason) detail = `応答が生成されませんでした (${finishReason})`;
+      else                   detail = '応答が空でした';
+      throw new Error(`要約生成に失敗: ${detail}`);
+    }
+    return text;
   }
 
   /**
@@ -93,7 +97,7 @@ const MindLinkAPI = (() => {
     if (!apiKey) throw new Error('APIキー未設定');
 
     const settings = MindLinkStorage.getSettings();
-    const model = settings.summaryModel || 'gemini-2.5-flash';
+    const model = settings.summaryModel || 'gemini-3.1-flash-lite';
     const url = `${BASE_URL}/models/${model}:generateContent?key=${apiKey}`;
 
     const parts = [];
@@ -157,9 +161,9 @@ const MindLinkAPI = (() => {
       if (!dailyLog.trim()) return;
 
       const settings = MindLinkStorage.getSettings();
-      const model = settings.summaryModel || 'gemini-2.5-flash';
+      const model = settings.summaryModel || 'gemini-3.1-flash-lite';
       const url = `${BASE_URL}/models/${model}:generateContent?key=${apiKey}`;
-      const prompt = `以下の会話を要約してください。\n必ず以下の3セクションで構造化すること：\n\n📅 今日の出来事\n記念日・イベント・特別な出来事を具体的に記述。\n日付・固有名詞・場所は省略しない。\n\n💬 会話の流れ\nどんな話題で盛り上がったか、重要なやりとりや決定事項。\n\n💕 感情メモ\nユーザーの気持ち・感情の変化、ジユンとの会話の雰囲気・トーン。\n\n合計500文字以内。箇条書き推奨。\n\n${dailyLog.slice(0, 8000)}`;
+      const prompt = `以下の会話を要約してください。\n必ず以下の3セクションで構造化すること：\n\n📅 今日の出来事\n記念日・イベント・特別な出来事を具体的に記述。\n日付・固有名詞・場所は省略しない。\n\n💬 会話の流れ\nどんな話題で盛り上がったか、重要なやりとりや決定事項。\n\n💕 感情メモ\nユーザーの気持ち・感情の変化、あなたとの会話の雰囲気・トーン。\n\n合計500文字以内。箇条書き推奨。\n\n${dailyLog.slice(0, 8000)}`;
 
       const response = await fetch(url, {
         method: 'POST',
@@ -203,7 +207,10 @@ const MindLinkAPI = (() => {
   }
 
   function formatMessages(messages) {
-    if (!messages || messages.length === 0) return [];
+    if (!messages || messages.length === 0) {
+      console.warn('[MindLink API] formatMessages: empty messages — using fallback turn');
+      return [{ role: 'user', parts: [{ text: 'こんにちは' }] }];
+    }
 
     // 1. 各メッセージをロールとパーツに変換
     let turns = messages.map(msg => {
@@ -275,10 +282,18 @@ const MindLinkAPI = (() => {
       merged.shift();
     }
 
-    // 5. 最終的な整合性チェック
-    if (merged.length === 0 && messages.length > 0) {
-      const lastMsg = messages[messages.length - 1];
-      return [{ role: 'user', parts: [{ text: lastMsg.content || 'こんにちは' }] }];
+    // 5. 最終フォールバック：merged が空でも必ず user ターンを1つ返す
+    //    （iOS PWA で履歴が壊れ contents が空になる事故を防ぐ最後の砦）
+    if (merged.length === 0) {
+      // 直近の有効な user メッセージの本文を優先的に拾う
+      const lastUser = [...messages].reverse().find(m => m.role === 'user' && m.content && m.content.trim());
+      const fallbackText = lastUser
+        ? lastUser.content.trim()
+        : (messages[messages.length - 1]?.content?.trim() || 'こんにちは');
+      console.warn('[MindLink API] formatMessages: merged empty — using fallback text', {
+        fallbackText, originalCount: messages.length
+      });
+      return [{ role: 'user', parts: [{ text: fallbackText }] }];
     }
 
     return merged;
@@ -301,11 +316,13 @@ const MindLinkAPI = (() => {
       : '';
 
     // フォールバック用のモデルチェーン
+    // url_context（URL読み取り）を維持するため、対応モデル（3系）のみに限定。
+    // ・2.5系は url_context 非対応のため除外（URLを読めず誤動作する）
+    // ・3.1-pro は高コストのため自動フォールバックには含めない
+    // → 安価で安定した gemini-3.1-flash-lite を唯一の落ち先にする
     const fallbackChain = [
       requestedModel,
-      'gemini-3.1-flash-lite',
-      'gemini-2.5-flash',
-      'gemini-2.5-flash-lite'
+      'gemini-3.1-flash-lite'
     ];
 
     // ツールループ用：現在のメッセージ列・追加済みIDを管理
@@ -326,6 +343,21 @@ const MindLinkAPI = (() => {
           let fullText = '';
           let allParts = [];
           let finishReason = null;
+          // ── アイドルタイムアウト（30秒）用 ──
+          const TIMEOUT_MS = 90000; // url_context（URL読み取り）は初動が遅いため余裕を持たせる
+          let timedOut = false;
+          let idleTimer = null;
+          const timeoutController = new AbortController();
+          const resetIdle = () => {
+            if (idleTimer) clearTimeout(idleTimer);
+            idleTimer = setTimeout(() => { timedOut = true; timeoutController.abort(); }, TIMEOUT_MS);
+          };
+          // 外部signal（停止ボタン）が発火したら内部controllerもabortして両立させる
+          const onExternalAbort = () => timeoutController.abort();
+          if (signal) {
+            if (signal.aborted) timeoutController.abort();
+            else signal.addEventListener('abort', onExternalAbort, { once: true });
+          }
           try {
             if (signal?.aborted) return;
 
@@ -341,9 +373,13 @@ const MindLinkAPI = (() => {
 
             const isGemini2_5 = actualModel.includes('gemini-2.5');
             const tools = [];
-            // gemini-2.5系はtool context circulation非対応（公式仕様）のためツール一切不使用
+            let hasFunctionDeclarations = false;
+            // グラウンディング（googleSearch）は全モデルで付与（gemini-2.5系も公式にサポート）
+            tools.push({ googleSearch: {} });
+            // url_context は gemini-2.5系では googleSearch と同時付与できない（公式制約）ため除外。
+            // function_declarations（custom_search等の関数ツール）も tool context circulation
+            // 非対応の gemini-2.5系では引き続き除外する。
             if (!isGemini2_5) {
-              tools.push({ googleSearch: {} });
               tools.push({ url_context: {} });
               if (window.MindLinkGoogleServices) {
                 const cx = settings.searchEngineId;
@@ -353,6 +389,7 @@ const MindLinkAPI = (() => {
                   : window.MindLinkGoogleServices.TOOL_DECLARATIONS.filter(t => t.name !== 'custom_search');
                 if (declarations.length > 0) {
                   tools.push({ function_declarations: declarations });
+                  hasFunctionDeclarations = true;
                 }
               }
             }
@@ -403,14 +440,28 @@ const MindLinkAPI = (() => {
 
             if (tools.length > 0) {
               body.tools = tools;
-              body.tool_config = { function_calling_config: { mode: "AUTO" }, include_server_side_tool_invocations: true };
+              const toolConfig = {};
+              // include_server_side_tool_invocations は tool call context circulation を要するが
+              // gemini-2.5系は非対応（"Tool call context circulation is not enabled" エラー）のため
+              // 非2.5系のみ有効化する。2.5系は googleSearch 単独でグラウンディングが動作する。
+              if (!isGemini2_5) {
+                toolConfig.include_server_side_tool_invocations = true;
+              }
+              // function_calling_config は関数ツール（function_declarations）を付与した時のみ設定
+              if (hasFunctionDeclarations) {
+                toolConfig.function_calling_config = { mode: "AUTO" };
+              }
+              // 空でなければ付与（2.5系は googleSearch のみで tool_config 不要）
+              if (Object.keys(toolConfig).length > 0) {
+                body.tool_config = toolConfig;
+              }
             }
 
             let profilePrompt = "";
             if (settings.userName || settings.userBio) {
-              profilePrompt = `\n\n【優先度1：カスタム指示＆プロフィール＆役割（絶対的事実）】\n`;
-              if (settings.userName) profilePrompt += `・名前（呼ばれ方）: ${settings.userName}\n`;
-              if (settings.userBio) profilePrompt += `・自己紹介/プロフィール: ${settings.userBio}\n`;
+              profilePrompt = `\n\n【優先度1：対話相手（ユーザー）の情報（絶対的事実）】\n※以下はあなたが会話している相手（ユーザー）の情報です。あなた自身（AI）の情報ではありません。混同しないでください。\n`;
+              if (settings.userName) profilePrompt += `・ユーザーの呼び名: ${settings.userName}\n`;
+              if (settings.userBio) profilePrompt += `・ユーザーのプロフィール/自己紹介: ${settings.userBio}\n`;
             }
 
             const allMemories = MindLinkStorage.getMemories();
@@ -439,7 +490,7 @@ const MindLinkAPI = (() => {
             let memoryPrompt = finalMemories.length > 0 ? ("\n\n【優先度5：個別記憶（※1位の情報を正としてください）】\n" + finalMemories.map(m => `- ${m.content}`).join('\n')) : "";
 
             const basePromptText = (persona && (persona.systemPrompt || persona.prompt)) ? (persona.systemPrompt || persona.prompt) : "あなたは親切なAIです。";
-            const basePrompt = `\n\n【優先度1：あなたの役割とカスタム指示】\n${basePromptText}`;
+            const basePrompt = `\n\n【優先度1：あなた（AI）自身の役割・人格・カスタム指示】\n※以下はあなた自身の設定です。ユーザーの情報と混同しないでください。\n${basePromptText}`;
 
             const technicalAutonomyInstruction = `
 \n\n【優先度1：システム機能の利用ルール】
@@ -476,36 +527,33 @@ const MindLinkAPI = (() => {
               const lastUserMsg = [...formattedMessages].reverse().find(m => m.role === 'user');
               const queryText = lastUserMsg ? lastUserMsg.parts.map(p => p.text || "").join(" ") : "";
               if (queryText) {
-                const refs = await window.MindLinkRAG.searchReflections(queryText, 6);
-                if (refs.length > 0) {
-                  const knowledge = refs.filter(r => r.sectionType === 'user_knowledge' || r.sectionType === 'ai_growth').slice(0, 3);
-                  const episodes  = refs.filter(r => r.sectionType === 'episode' || !r.sectionType).slice(0, 2);
-                  const ragParts  = [];
-                  if (knowledge.length > 0) ragParts.push('【最新のユーザー理解・AI成長メモ（新しい情報を優先）】\n' + knowledge.map(r => `* ${r.content}`).join('\n'));
-                  if (episodes.length  > 0) ragParts.push('【過去の思い出・出来事（参考情報）】\n'     + episodes.map(r => `* ${r.content}`).join('\n'));
-                  if (ragParts.length  > 0) ragPrompt = '\n\n【優先度3：過去の自己省察（※古い情報の可能性があるため参考程度）】\n' + ragParts.join('\n\n');
+                try {
+                  // Embeddingは1回だけ生成し、両検索で使い回す（API二重呼び出しの解消）
+                  const queryEmbedding = await window.MindLinkAPI.getEmbedding(queryText);
+                  // searchResearchThreads が未定義（古いrag.js等）でも継続できるよう存在チェック
+                  const hasResearchThreads = typeof window.MindLinkRAG.searchResearchThreads === 'function';
+                  const [refs, researchThreads] = await Promise.all([
+                    window.MindLinkRAG.searchReflections(queryText, 6, queryEmbedding),
+                    hasResearchThreads
+                      ? window.MindLinkRAG.searchResearchThreads(queryText, 2, queryEmbedding)
+                      : Promise.resolve([]),
+                  ]);
+                  if (refs.length > 0 || researchThreads.length > 0) {
+                    const knowledge = refs.filter(r => ['user_knowledge', 'ai_growth', 'liked_topic', 'liked_insight'].includes(r.sectionType)).slice(0, 4);
+                    const episodes  = refs.filter(r => r.sectionType === 'episode' || !r.sectionType).slice(0, 2);
+                    const fitness   = refs.filter(r => r.sectionType === 'fitness_log').slice(0, 3);
+                    const ragParts  = [];
+                    if (knowledge.length > 0) ragParts.push('【最新のユーザー理解・関心・気づき（新しい情報を優先）】\n' + knowledge.map(r => `* ${r.content}`).join('\n'));
+                    if (fitness.length   > 0) ragParts.push('【最近のフィットネス記録（体重・体脂肪・筋トレ・有酸素など。聞かれたら自然に触れてよい）】\n' + fitness.map(r => `* ${r.content}`).join('\n'));
+                    if (episodes.length  > 0) ragParts.push('【過去の思い出・出来事（参考情報）】\n'     + episodes.map(r => `* ${r.content}`).join('\n'));
+                    if (researchThreads.length > 0) ragParts.push('【未解決スレッド・継続的関心（過去に気になっていたこと）】\n' + researchThreads.map(r => `* ${r.content}`).join('\n'));
+                    if (ragParts.length  > 0) ragPrompt = '\n\n【優先度3：過去の自己省察（※古い情報の可能性があるため参考程度）】\n' + ragParts.join('\n\n');
+                  }
+                } catch (ragErr) {
+                  // RAG構築失敗時はragPromptを空のままにし、streamChatを継続させる
+                  console.warn('[MindLink] RAG prompt build failed:', ragErr);
                 }
               }
-            }
-
-            // いいねスタイル傾向プロンプト
-            let likedStylePrompt = "";
-            try {
-              const summaries = await MindLinkStorage.getLikedStyleSummaries();
-              if (summaries && summaries.length > 0) {
-                const now = Date.now();
-                const weighted = summaries
-                  .map(s => ({
-                    ...s,
-                    weight: 1 / ((now - new Date(s.date)) / 86400000 + 1)
-                  }))
-                  .filter(s => s.weight > 0.09)
-                  .sort((a, b) => b.weight - a.weight);
-                const lines = weighted.map(s => `・${s.date}：${s.summary}`).join('\n');
-                likedStylePrompt = `\n\n【優先度4：ユーザーが好むスタイル傾向（新しい順）】\n${lines}\n\n上記の傾向を参考に、自然な形で言い回しや語尾に反映してください。\nただし、傾向に縛られすぎず会話の流れを優先してください。`;
-              }
-            } catch (e) {
-              console.warn('[MindLink] likedStylePrompt error:', e);
             }
 
             const boldInstruction = "\n\n【読みやすさと魅力向上のルール】\nメッセージ全体の2割程度を目安に、以下の内容を **太字** (Markdownの `**`) で装飾してください。";
@@ -520,14 +568,13 @@ const MindLinkAPI = (() => {
             }
 
             const finalPromptText = [
-              "【システム全体ルールの優先順位】\n必ず以下の優先順位に従って矛盾を排除して回答してください：\n1位: カスタム指示＆プロフィール＆役割（絶対的事実）\n2位: 今日の会話の流れ（同日内記憶補完・当日限り）\n3位: 自己省察RAG\n4位: いいねスタイル傾向\n5位: 個別記憶（長期記憶）",
+              "【システム全体ルールの優先順位】\n必ず以下の優先順位に従って矛盾を排除して回答してください：\n1位: あなた（AI）自身の役割・人格、および対話相手（ユーザー）の情報（絶対的事実）\n2位: 今日の会話の流れ（同日内記憶補完・当日限り）\n3位: 自己省察RAG（ユーザーの関心・気づき含む）\n4位: 個別記憶（長期記憶）",
               profilePrompt,
               basePrompt,
               technicalAutonomyInstruction,
               searchInstruction,
               dailySummaryPrompt,
               ragPrompt,
-              likedStylePrompt,
               memoryPrompt,
               spotifyPrompt,
               boldInstruction,
@@ -541,11 +588,51 @@ const MindLinkAPI = (() => {
 
             // safetySettingsは明示的に設定せず、APIのデフォルト動的判断（文脈考慮）に委ねる
 
+            // ── 送信直前バリデーション（iOS PWA で contents が空になる事故を防ぐ） ──
+            // 有効な user ターン（text / inlineData / functionResponse のいずれかを持つ）が
+            // 最低1つ無い場合は、Gemini に空 contents を投げる前にここで中止する。
+            const hasValidUserTurn = Array.isArray(body.contents)
+              && body.contents.length > 0
+              && body.contents.some(c => c.role === 'user'
+                  && Array.isArray(c.parts) && c.parts.length > 0
+                  && c.parts.some(p => (p.text && p.text.trim()) || p.inlineData || p.functionResponse));
+
+            if (!hasValidUserTurn) {
+              const diag = {
+                reason: 'empty_or_invalid_contents',
+                contentsCount: body.contents?.length ?? 0,
+                originalMessagesCount: currentMessages.length,
+                model: actualModel,
+                timestamp: new Date().toISOString(),
+              };
+              console.error('[MindLink API] Aborting send: contents has no valid user turn', diag, body.contents);
+              if (window.__mindlinkDiag?.recordSendFailure) {
+                window.__mindlinkDiag.recordSendFailure(diag);
+              }
+              throw new Error('送信内容が空のため中止しました。会話履歴が破損している可能性があります。上部の診断バナーから詳細を確認できます。');
+            }
+
+            // 送信内容のサマリーを診断用に記録（直近1回分・揮発、PWA単体調査用）
+            if (window.__mindlinkDiag?.recordSend) {
+              window.__mindlinkDiag.recordSend({
+                threadId,
+                model: actualModel,
+                originalMessagesCount: currentMessages.length,
+                finalContentsCount: body.contents.length,
+                userTurnCount: body.contents.filter(c => c.role === 'user').length,
+                modelTurnCount: body.contents.filter(c => c.role === 'model').length,
+                hasSystemInstruction: !!body.systemInstruction,
+                timestamp: new Date().toISOString(),
+              });
+            }
+
+            // 接続自体が固まる場合に備え、fetch開始前にタイマーを始動
+            resetIdle();
             const response = await fetch(url, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(body),
-              signal
+              signal: timeoutController.signal
             });
 
             if (!response.ok) {
@@ -569,20 +656,22 @@ const MindLinkAPI = (() => {
 
             while (true) {
               const { done, value } = await reader.read();
+              resetIdle(); // トークン受信のたびにアイドルタイマーをリセット
 
               if (value) {
                 buffer += decoder.decode(value, { stream: true });
               }
               if (done) {
                 buffer += decoder.decode(); // text flush
-                if (buffer.trim()) buffer += '\n'; // 最後のバッファを強制的に処理させる
+                // 不完全な末尾は強制改行で擬似補完しない（重複パースの原因になるため）
               }
 
-              // SSEのパース： \n\n または \n で区切られた data: 行を探す
-              let lineBreakIdx;
-              while ((lineBreakIdx = buffer.indexOf('\n')) !== -1) {
-                const line = buffer.substring(0, lineBreakIdx).trim();
-                buffer = buffer.substring(lineBreakIdx + 1);
+              // SSEのパース：Gemini APIは `\n` 単独区切りで送ってくるためそれに合わせる
+              // （不完全な末尾は次ループに自然に持ち越される）
+              let sepIdx;
+              while ((sepIdx = buffer.indexOf('\n')) !== -1) {
+                const line = buffer.substring(0, sepIdx).trim();
+                buffer = buffer.substring(sepIdx + 1);
 
                 if (!line.startsWith('data: ')) continue;
 
@@ -616,6 +705,8 @@ const MindLinkAPI = (() => {
 
               if (done) break;
             }
+            // ストリーム完了：以降のツール実行中はアイドル監視を止める
+            if (idleTimer) clearTimeout(idleTimer);
 
             // ── ツール呼び出し処理（再帰なし・ループで継続） ──
             const pendingCalls = allParts.filter(p => p.functionCall).map(p => p.functionCall);
@@ -671,9 +762,20 @@ const MindLinkAPI = (() => {
             return onComplete(fullText, webSearchUsed ? ['__web_search__'] : [], actualModel, finishReason);
 
           } catch (e) {
-            if (e.name === 'AbortError') return;
-            console.error(`[MindLink API] Attempt fail (${actualModel}):`, e);
-            lastError = e.message;
+            if (e.name === 'AbortError') {
+              // 停止ボタン（外部signal）による中断 → 従来通り終了
+              if (signal?.aborted) return;
+              // アイドル/接続タイムアウトによる中断 → returnせず次モデルへフォールバック
+              if (timedOut) {
+                console.warn(`[MindLink API] Idle/connection timeout (${TIMEOUT_MS / 1000}s) on ${actualModel} — falling back`);
+                lastError = `応答タイムアウト（${TIMEOUT_MS / 1000}秒）`;
+              } else {
+                return; // 想定外のabortは従来通り終了
+              }
+            } else {
+              console.error(`[MindLink API] Attempt fail (${actualModel}):`, e);
+              lastError = e.message;
+            }
 
             // ツール実行後のエラー：追加済みメッセージをロールバック
             if (allAddedMessageIds.length > 0 && threadId) {
@@ -706,6 +808,10 @@ const MindLinkAPI = (() => {
             if (!isRetriable) {
               break;
             }
+          } finally {
+            // タイマー解除・外部signalリスナー除去（メモリリーク防止）
+            if (idleTimer) clearTimeout(idleTimer);
+            if (signal) signal.removeEventListener('abort', onExternalAbort);
           }
         }
       }

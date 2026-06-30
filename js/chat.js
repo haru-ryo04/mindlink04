@@ -141,12 +141,15 @@ const MindLinkChat = (() => {
   }
 
   // 既存メッセージ読み込み
-  function loadMessages(threadId) {
+  async function loadMessages(threadId) {
     clearMessages();
-    const messages = MindLinkStorage.getMessages(threadId);
+    const thread = MindLinkStorage.getThread(threadId);
+    // アーカイブ済みは IndexedDB倉庫から、それ以外は localStorage から読む
+    const messages = thread?.isArchived
+      ? ((await MindLinkStorage.getArchivedMessages(threadId)) || [])
+      : MindLinkStorage.getMessages(threadId);
     if (messages.length === 0) return;
 
-    const thread = MindLinkStorage.getThread(threadId);
     const persona = MindLinkStorage.getPersona(thread?.personaId) || MindLinkStorage.getDefaultPersona();
     const welcomeEl = document.getElementById('welcome-state');
     if (welcomeEl) welcomeEl.remove();
@@ -477,7 +480,20 @@ const MindLinkChat = (() => {
 
     // 最新の履歴を取得し、現在のメッセージの添付データをメモリから復元
     const historyMessages = MindLinkStorage.getMessages(threadId).slice(-20);
-    const apiMessages = historyMessages.map(m => m.id === userMsg.id ? userMsg : m);
+    let apiMessages = historyMessages.map(m => m.id === userMsg.id ? userMsg : m);
+
+    // 空チェック：履歴保存の失敗（iOS PWA のクォータ超過等）で apiMessages が
+    // 空になったり userMsg を含まないと、API へ空 contents が送られてしまう。
+    // その場合は今回のユーザー発言だけでも必ず送れるよう userMsg を補完する。
+    const userMsgIncluded = apiMessages.some(m => m.id === userMsg.id);
+    if (apiMessages.length === 0 || !userMsgIncluded) {
+      console.warn('[MindLink Chat] apiMessages が空 or userMsg 欠落 — userMsg で補完', {
+        historyCount: historyMessages.length,
+        apiCount: apiMessages.length,
+        userMsgIncluded,
+      });
+      apiMessages = [userMsg];
+    }
 
     let firstChunkReceived = false;
 
@@ -755,7 +771,12 @@ const MindLinkChat = (() => {
 
     if (isToolActive) {
       console.log('[MindLink] Autonomous message skipped: Tool activity detected.');
-      return; 
+      // スキップ時もストリーミング状態を必ず元に戻す（戻し漏れるとUIがロックされる）
+      _isStreaming = false;
+      _abortController = null;
+      hideTypingIndicator();
+      setSendButtonState(false);
+      return;
     }
 
     // 経過時間と直前話題から適切なトリガープロンプトを生成

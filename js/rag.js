@@ -18,19 +18,30 @@ const MindLinkRAG = (() => {
     return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
   }
 
-  // 時間減衰係数（episode/旧形式は減衰なし、user_knowledge/ai_growthは指数減衰）
+  // 時間減衰係数
+  // ・episode / 旧形式（sectionTypeなし）: 減衰なし（1.0）
+  // ・research_thread: 緩やかな減衰（半減期 約70日）
+  // ・user_knowledge / ai_growth / liked_topic / liked_insight: 標準減衰（半減期 約35日）
+  // ・fitness_log: 標準減衰（半減期 約35日・exp(-0.02*d)）
   function temporalDecay(reflection) {
     if (!reflection.sectionType || reflection.sectionType === 'episode') return 1.0;
     const daysPassed = (Date.now() - reflection.createdAt) / (1000 * 60 * 60 * 24);
+    if (reflection.sectionType === 'research_thread') {
+      return Math.exp(-0.01 * daysPassed); // 半減期 約70日（継続的関心は長く保持）
+    }
+    if (reflection.sectionType === 'fitness_log') {
+      return Math.exp(-0.02 * daysPassed); // 半減期 約35日（フィットネス記録）
+    }
+    // user_knowledge / ai_growth / liked_topic / liked_insight はすべて標準減衰
     return Math.exp(-0.02 * daysPassed); // 半減期 約35日
   }
 
   // 関連する省察(Reflection)の検索
-  async function searchReflections(query, topK = 3) {
+  async function searchReflections(query, topK = 3, precomputedEmbedding = null) {
     try {
-      if (!window.MindLinkAPI || !window.MindLinkAPI.getEmbedding) return [];
+      if (!precomputedEmbedding && (!window.MindLinkAPI || !window.MindLinkAPI.getEmbedding)) return [];
       
-      const queryEmbedding = await window.MindLinkAPI.getEmbedding(query);
+      const queryEmbedding = precomputedEmbedding || await window.MindLinkAPI.getEmbedding(query);
       const reflections = await MindLinkStorage.getReflections();
       
       if (reflections.length === 0) return [];
@@ -92,10 +103,36 @@ const MindLinkRAG = (() => {
     }
   }
 
+  // 未解決スレッド・継続的関心の検索
+  async function searchResearchThreads(query, topK = 3, precomputedEmbedding = null) {
+    try {
+      if (!precomputedEmbedding && (!window.MindLinkAPI || !window.MindLinkAPI.getEmbedding)) return [];
+
+      const queryEmbedding = precomputedEmbedding || await window.MindLinkAPI.getEmbedding(query);
+      const reflections = await MindLinkStorage.getReflections();
+
+      const threads = reflections.filter(r =>
+        r.sectionType === 'research_thread' && r.embedding && Array.isArray(r.embedding)
+      );
+      if (threads.length === 0) return [];
+
+      const scored = threads.map(r => ({
+        ...r,
+        score: cosineSimilarity(queryEmbedding, r.embedding) * temporalDecay(r)
+      }));
+      scored.sort((a, b) => b.score - a.score);
+      return scored.slice(0, topK);
+    } catch (e) {
+      console.error('[MindLink RAG] Research threads search error:', e);
+      return [];
+    }
+  }
+
   return {
     cosineSimilarity,
     searchReflections,
-    searchMemories
+    searchMemories,
+    searchResearchThreads
   };
 })();
 
