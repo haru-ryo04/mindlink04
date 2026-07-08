@@ -191,7 +191,19 @@ const MindLinkChat = (() => {
     let attachmentsHtml = '';
     if (msg.attachments && msg.attachments.length > 0) {
       msg.attachments.forEach(att => {
-        if (att.type.startsWith('image/')) {
+        if (att.type === 'video/youtube') {
+          // YouTube視聴用の疑似添付はチップ表示のみ（URL本文はメッセージに含まれている）
+          attachmentsHtml += `
+            <div class="message-attachment">
+              <span class="message-attachment-file">🎬 YouTube動画を一緒に視聴</span>
+            </div>`;
+        } else if (att.type === 'generated-image') {
+          // 生成画像: 本体はIndexedDBにあるため、まずスロットを描画して非同期で読み込む
+          attachmentsHtml += `
+            <div class="message-attachment generated-image-slot" data-image-id="${escapeHtml(att.imageId || '')}">
+              <div class="generated-image-loading">🎨 読み込み中…</div>
+            </div>`;
+        } else if (att.type.startsWith('image/')) {
           attachmentsHtml += `
             <div class="message-attachment">
               <img src="${att.data}" alt="添付画像" onclick="window.open('${att.data}')">
@@ -254,6 +266,11 @@ const MindLinkChat = (() => {
       </div>
     `;
 
+    // 生成画像スロット: IndexedDBから本体を非同期で読み込んで差し込む
+    wrapper.querySelectorAll('.generated-image-slot').forEach(slot => {
+      hydrateGeneratedImage(slot);
+    });
+
     // コードコピーボタンのイベント
     wrapper.querySelectorAll('.code-copy-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
@@ -299,6 +316,74 @@ const MindLinkChat = (() => {
 
     if (animate) scrollToBottom();
     return wrapper;
+  }
+
+  // ── 生成画像の表示・保存（本体はIndexedDB・メッセージは参照IDのみ） ──
+
+  async function hydrateGeneratedImage(slot) {
+    const imageId = slot.dataset.imageId;
+    if (!imageId) {
+      slot.innerHTML = '<div class="generated-image-expired">🖼 画像を読み込めませんでした</div>';
+      return;
+    }
+    try {
+      const record = await MindLinkStorage.getGeneratedImage(imageId);
+      if (record && record.data) {
+        slot.innerHTML = `
+          <img src="${record.data}" alt="生成画像" class="generated-image">
+          <button class="generated-image-save-btn" title="カメラロールに保存">📤 保存</button>`;
+        slot.querySelector('.generated-image-save-btn').addEventListener('click', (e) => {
+          e.stopPropagation();
+          shareGeneratedImage(imageId);
+        });
+      } else {
+        // 7日整理で本体が削除済み → プレースホルダー
+        slot.innerHTML = '<div class="generated-image-expired">🖼 画像は保存期間を終了しました</div>';
+      }
+    } catch (e) {
+      console.warn('[MindLink] 生成画像の読み込みに失敗:', imageId, e);
+      slot.innerHTML = '<div class="generated-image-expired">🖼 画像を読み込めませんでした</div>';
+    }
+  }
+
+  // iOS共有シート経由でカメラロールへ保存（非対応環境はダウンロードにフォールバック）
+  async function shareGeneratedImage(imageId) {
+    try {
+      const record = await MindLinkStorage.getGeneratedImage(imageId);
+      if (!record || !record.data) {
+        MindLinkApp.showToast('画像データが見つかりません（保存期間終了の可能性）');
+        return;
+      }
+      const mimeType = record.mimeType || 'image/png';
+      const ext = mimeType.split('/')[1] || 'png';
+      const fileName = `mindlink_${imageId}.${ext}`;
+      const blob = await (await fetch(record.data)).blob();
+      const file = new File([blob], fileName, { type: mimeType });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try {
+          await navigator.share({ files: [file] });
+        } catch (shareErr) {
+          // ユーザーが共有シートを閉じた場合など（エラー扱いにしない）
+          if (shareErr.name !== 'AbortError') console.warn('[MindLink] 共有失敗:', shareErr);
+        }
+      } else {
+        const a = document.createElement('a');
+        a.href = record.data;
+        a.download = fileName;
+        a.click();
+      }
+    } catch (e) {
+      console.error('[MindLink] 画像保存エラー:', e);
+      MindLinkApp.showToast('画像の保存に失敗しました');
+    }
+  }
+
+  // 編集置き換え時にimage-gen.jsから呼ばれる: 古い画像メッセージのバブルを画面から取り除く
+  // （編集後の画像は会話の最下部に新しいメッセージとして表示される）
+  function removeMessageFromView(messageId) {
+    const msgEl = document.querySelector(`.message[data-id="${messageId}"]`);
+    if (!msgEl) return;
+    msgEl.closest('.message-wrapper')?.remove();
   }
 
   // ストリーミング用タイピング表示
@@ -439,12 +524,24 @@ const MindLinkChat = (() => {
       _editingMessageId = null;
     }
 
+    // YouTube URLの検出 → 視聴用の疑似添付として追加（動画として処理されるのはこの送信1回だけ。
+    // ストレージ保存時にURLは添付から除かれるため、以降の履歴で動画が再送されることはない）
+    const videoAttachments = [..._attachedFiles];
+    const ytMatch = content.match(/https?:\/\/(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?[^\s]*v=|shorts\/)|youtu\.be\/)[\w-]{5,}[^\s]*/);
+    if (ytMatch && !videoAttachments.some(f => f.type && f.type.startsWith('video/'))) {
+      videoAttachments.push({
+        name: 'YouTube動画',
+        type: 'video/youtube',
+        url: ytMatch[0],
+      });
+    }
+
     // ユーザーメッセージ（メモリ上のフルデータ：画像base64を含む）
     const userMsg = {
       id: 'msg_' + Date.now(),
       role: 'user',
       content,
-      attachments: [..._attachedFiles],
+      attachments: videoAttachments,
       timestamp: Date.now(),
     };
 
@@ -559,8 +656,33 @@ const MindLinkChat = (() => {
                 if (!att.data && !att.url) continue;
                 const summary = await window.MindLinkAPI.summarizeAttachment(att);
                 if (summary) {
-                  const label = att.name ? `📎 ${att.name}` : att.url ? `🔗 ${att.url}` : '📎 添付ファイル';
+                  const label = att.type === 'video/youtube'
+                    ? `🎬 YouTube動画（${att.url}）`
+                    : att.type && att.type.startsWith('video/')
+                    ? `🎬 ${att.name || '動画'}`
+                    : att.name ? `📎 ${att.name}` : att.url ? `🔗 ${att.url}` : '📎 添付ファイル';
                   summaryLines.push(`${label}\n${summary}`);
+
+                  // 動画の視聴メモはRAGにも保存（後日「この前の動画さ…」で思い出せるように）
+                  if (att.type && att.type.startsWith('video/')) {
+                    try {
+                      const memoContent = `（一緒に見た動画の記憶）${summary}`;
+                      const emb = await window.MindLinkAPI.getEmbedding(memoContent);
+                      await MindLinkStorage.saveReflection({
+                        id:           'video_' + Date.now(),
+                        content:      memoContent,
+                        embedding:    emb,
+                        sectionType:  'video_memo',
+                        sectionLabel: '動画メモ',
+                        createdAt:    Date.now(),
+                        date:         new Date().toLocaleDateString('ja-JP'),
+                        type:         'video_memo',
+                      });
+                      console.log('[MindLink] 動画メモをRAGに保存しました');
+                    } catch (memoErr) {
+                      console.warn('[MindLink] 動画メモのRAG保存に失敗（履歴上の要約は保存済み）:', memoErr);
+                    }
+                  }
                 }
               }
               if (summaryLines.length > 0) {
@@ -614,18 +736,6 @@ const MindLinkChat = (() => {
             sendAutonomousMessage('（一度メッセージを完結させましたが、さらに伝えたい想いが溢れています。自然な変化をつけて、追加の想いを届けてください）');
           }, 4500); 
         }
-
-        // タイトル自動生成機能（コスト削減のため無効化）
-        /*
-        if (messages.length === 2 && thread.title === '新しいチャット') {
-          const title = await MindLinkAPI.generateTitle(content, cleanedText);
-          if (title) {
-            MindLinkThreads.updateThreadTitle(threadId, title);
-            document.getElementById('current-thread-title').textContent = title;
-            MindLinkThreads.renderThreadList();
-          }
-        }
-        */
 
         // メモリ提案表示（内部マーカーを除外してから表示）
         const memorySuggestions = suggestions.filter(s => s !== '__web_search__');
@@ -686,14 +796,29 @@ const MindLinkChat = (() => {
     }
   }
 
+  // 動画のサイズ上限: APIリクエスト全体の20MB制限に対し、base64膨張（約4/3倍）と
+  // プロンプト分の余裕を見て12MBまでとする
+  const MAX_VIDEO_BYTES = 12 * 1024 * 1024;
+
   async function handleFileSelect(e) {
     const files = Array.from(e.target.files);
     for (const file of files) {
       if (_attachedFiles.length >= 5) break; // 最大5件
+      if (file.type && file.type.startsWith('video/')) {
+        if (file.size > MAX_VIDEO_BYTES) {
+          MindLinkApp.showToast('動画が大きすぎます（12MBまで）。iPhoneの写真編集でトリミングしてから添付してください 🎬');
+          continue;
+        }
+        if (_attachedFiles.some(f => f.type && f.type.startsWith('video/'))) {
+          MindLinkApp.showToast('動画は1メッセージにつき1本まで添付できます');
+          continue;
+        }
+      }
       const base64 = await fileToBase64(file);
       _attachedFiles.push({
         name: file.name,
         type: file.type,
+        size: file.size,
         data: base64
       });
     }
@@ -720,6 +845,8 @@ const MindLinkChat = (() => {
       item.className = 'file-preview-item';
       if (file.type.startsWith('image/')) {
         item.style.backgroundImage = `url(${file.data})`;
+      } else if (file.type.startsWith('video/')) {
+        item.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;font-size:24px;">🎬</div>';
       } else {
         item.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;font-size:24px;">📄</div>';
       }
@@ -796,8 +923,8 @@ const MindLinkChat = (() => {
       const lastTopic = recentUserMsgs ? `（直前の話題: 「${recentUserMsgs}」）` : '';
 
       if (elapsedMs > 24 * 60 * 60 * 1000) {
-        // 24時間超え：久しぶり表現を許可
-        triggerText = `ユーザーが${elapsedHours}時間ぶりに戻ってきました。久しぶりの再会として自然に話しかけてください。以前の会話の文脈${lastTopic}を踏まえ、唐突にならないよう配慮してください。`;
+        // 24時間超え：久しぶり表現を許可＋未解決スレッドへの言及を促す（再会時が最も自然な場面）
+        triggerText = `ユーザーが${elapsedHours}時間ぶりに戻ってきました。久しぶりの再会として自然に話しかけてください。以前の会話の文脈${lastTopic}を踏まえ、唐突にならないよう配慮してください。あなたが気にかけている未解決スレッド（システム情報参照）に自然につながるものがあれば、「そういえば、あの件どうなった？」と話題にするのに最適なタイミングです。`;
       } else {
         // 24時間未満：話題を引き継ぐ通常モード
         const timeHint = elapsedMinutes < 10
@@ -805,7 +932,11 @@ const MindLinkChat = (() => {
           : elapsedMinutes < 60
           ? `${elapsedMinutes}分ほど間が空きました`
           : `${elapsedHours}時間ほど間が空きました`;
-        triggerText = `${timeHint}。直前の会話の流れ${lastTopic}を自然に引き継いで、あなたから優しく話しかけてください。「久しぶり」「元気だった？」など長期間離れていたような表現は使わないでください。`;
+        // 1時間以上の間が空いたときだけ、未解決スレッドへの言及を軽く促す（短い間隔ではしつこくなるため）
+        const threadHint = elapsedMs > 60 * 60 * 1000
+          ? 'もし自然につながるなら、あなたが気にかけている未解決スレッド（システム情報参照）のどれかに「そういえば…」と触れてみてもいいでしょう。'
+          : '';
+        triggerText = `${timeHint}。直前の会話の流れ${lastTopic}を自然に引き継いで、あなたから優しく話しかけてください。「久しぶり」「元気だった？」など長期間離れていたような表現は使わないでください。${threadHint}`;
       }
     }
 
@@ -1051,6 +1182,7 @@ const MindLinkChat = (() => {
     autoResizeInput,
     stopStreaming,
     isStreaming,
+    removeMessageFromView,
     openAddMemoryWithContent,
     initFileEvents,
     sendAutonomousMessage,

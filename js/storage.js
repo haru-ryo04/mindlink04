@@ -10,7 +10,7 @@ const MindLinkStorage = (() => {
   
   // ── IndexedDB Helper (Stability for large RAG data) ──
   const DB_NAME = 'MindLinkDB';
-  const DB_VERSION = 6;
+  const DB_VERSION = 7;
   const STORE_NAME = 'reflections';
   const TOKEN_STORE = 'secure_tokens';
   const DAILY_SUMMARY_STORE = 'daily_summary';
@@ -21,6 +21,11 @@ const MindLinkStorage = (() => {
   // アーカイブ済みスレッドの会話本文を保管する倉庫（localStorage容量対策）
   // keyPath は threadId（= スレッドID）。値は { id, messages: [...] }。
   const ARCHIVED_MESSAGES_STORE = 'archivedMessages';
+  // 画像生成機能：参照画像ライブラリ（最大5枚）と生成画像本体（7日で自動整理）
+  // 画像本体は容量が大きいためlocalStorageではなくIndexedDBに保管し、
+  // メッセージ側には参照ID（imageId）のみを持たせる。
+  const REFERENCE_IMAGES_STORE = 'referenceImages';
+  const GENERATED_IMAGES_STORE = 'generatedImages';
   let _db = null;
 
   async function openDB() {
@@ -52,6 +57,12 @@ const MindLinkStorage = (() => {
         }
         if (!db.objectStoreNames.contains(ARCHIVED_MESSAGES_STORE)) {
           db.createObjectStore(ARCHIVED_MESSAGES_STORE, { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains(REFERENCE_IMAGES_STORE)) {
+          db.createObjectStore(REFERENCE_IMAGES_STORE, { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains(GENERATED_IMAGES_STORE)) {
+          db.createObjectStore(GENERATED_IMAGES_STORE, { keyPath: 'id' });
         }
       };
       request.onsuccess = (e) => { _db = e.target.result; resolve(_db); };
@@ -239,6 +250,10 @@ const MindLinkStorage = (() => {
     googleClientId: '',
     googleClientSecret: '',
     summaryModel: 'gemini-3.1-flash-lite',
+    // ── 画像生成設定 ──
+    imageModel: 'gemini-3.1-flash-image',  // Nano Banana 2
+    imageAspectRatio: '1:1',
+    imageResolution: '2K',
   };
 
   function getSettings() {
@@ -636,6 +651,164 @@ const MindLinkStorage = (() => {
     });
   }
 
+  // ── 全体バックアップ（エクスポート/インポート） ──
+  // 含めないもの: APIキー等の秘密情報（下記リスト）・参照画像・生成画像・
+  // 一時データ（今日の会話要約・いいねバッファ）。
+  const BACKUP_EXCLUDED_SETTINGS = ['encryptedApiKey', 'encryptedGoogleServicesApiKey', 'googleClientSecret'];
+
+  async function exportFullBackup() {
+    const sanitizedSettings = { ...getSettings() };
+    BACKUP_EXCLUDED_SETTINGS.forEach(k => delete sanitizedSettings[k]);
+
+    // スレッド本文: アクティブはlocalStorage、アーカイブ済みはIndexedDB倉庫から取得
+    const threads = [];
+    for (const t of getThreads()) {
+      const messages = t.isArchived ? (await getArchivedMessages(t.id)) : getMessages(t.id);
+      threads.push({ ...t, messages: messages || [] });
+    }
+
+    const data = {
+      format: 'mindlink-full-backup',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      settings: sanitizedSettings,
+      activePersonaId: get('active_persona_id', null),
+      globalContext: getGlobalContext(),
+      personas: getPersonas(),
+      memories: getMemories(),
+      threads,
+      reflections: await getReflections(),
+      calendarEvents: getCalendarEvents(),
+      diaryEntries: getDiaryEntries(),
+      fitnessLogs: await getFitnessLogs(),
+      fitnessMenus: await getFitnessMenus(),
+      fitnessProfile: getFitnessProfile(),
+    };
+
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `mindlink_full_backup_${new Date().toISOString().split('T')[0]}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    return true;
+  }
+
+  // インポート: 形式検証のうえ、各セクションを既存の保存関数で書き戻す。
+  // ・ID重複は一律スキップ（既存データを上書きしない・非破壊マージ）
+  // ・設定は秘密情報キーを除いて反映（現在のAPIキー等は必ず保持される）
+  // 戻り値: セクションごとの取り込み件数レポート
+  async function importFullBackup(data) {
+    if (!data || data.format !== 'mindlink-full-backup' || !Array.isArray(data.personas)) {
+      throw new Error('対応していないファイル形式です');
+    }
+    const report = {};
+
+    // ペルソナ
+    {
+      const existing = new Set(getPersonas().map(p => p.id));
+      let n = 0;
+      for (const p of (data.personas || [])) {
+        if (!p || !p.id || existing.has(p.id)) continue;
+        savePersona(p); existing.add(p.id); n++;
+      }
+      report.personas = n;
+    }
+    // 個別記憶
+    {
+      const existing = new Set(getMemories().map(m => m.id));
+      let n = 0;
+      for (const m of (data.memories || [])) {
+        if (!m || !m.id || existing.has(m.id)) continue;
+        addMemory(m); existing.add(m.id); n++;
+      }
+      report.memories = n;
+    }
+    // スレッド（本文はアーカイブ状態に応じた置き場所へ復元）
+    {
+      const existing = new Set(getThreads().map(t => t.id));
+      let n = 0;
+      for (const entry of (data.threads || [])) {
+        if (!entry || typeof entry !== 'object' || !entry.id || existing.has(entry.id)) continue;
+        const { messages: msgs, ...meta } = entry;
+        try {
+          if (meta.isArchived) {
+            await idbPutArchivedMessages(meta.id, msgs || []);
+          } else {
+            setMessages(meta.id, msgs || []);
+          }
+          saveThread(meta);
+          existing.add(meta.id); n++;
+        } catch (e) {
+          console.error('[MindLink] スレッド復元失敗:', meta.id, e);
+        }
+      }
+      report.threads = n;
+    }
+    // 省察
+    {
+      const existingIds = new Set((await getReflections()).map(r => r.id));
+      const newItems = (data.reflections || []).filter(r => r && r.id && !existingIds.has(r.id));
+      if (newItems.length > 0) await idbPutMany(newItems);
+      report.reflections = newItems.length;
+    }
+    // カレンダー
+    {
+      const existing = new Set(getCalendarEvents().map(e => e.id));
+      let n = 0;
+      for (const ev of (data.calendarEvents || [])) {
+        if (!ev || !ev.id || existing.has(ev.id)) continue;
+        saveCalendarEvent(ev); existing.add(ev.id); n++;
+      }
+      report.calendar = n;
+    }
+    // 日記
+    {
+      const existing = new Set(getDiaryEntries().map(e => e.id));
+      let n = 0;
+      for (const e of (data.diaryEntries || [])) {
+        if (!e || !e.id || existing.has(e.id)) continue;
+        saveDiaryEntry(e); existing.add(e.id); n++;
+      }
+      report.diary = n;
+    }
+    // フィットネス（記録は同日1件ルールを既存関数に任せる）
+    {
+      let n = 0;
+      const existingLogs = new Set((await getFitnessLogs()).map(l => l.id));
+      for (const l of (data.fitnessLogs || [])) {
+        if (!l || !l.id || existingLogs.has(l.id)) continue;
+        await saveFitnessLog(l); existingLogs.add(l.id); n++;
+      }
+      const existingMenus = new Set((await getFitnessMenus()).map(m => m.id));
+      for (const m of (data.fitnessMenus || [])) {
+        if (!m || !m.id || existingMenus.has(m.id)) continue;
+        await saveFitnessMenu(m); existingMenus.add(m.id); n++;
+      }
+      report.fitness = n;
+    }
+    // 設定・その他
+    {
+      if (data.settings && typeof data.settings === 'object') {
+        const s = { ...data.settings };
+        BACKUP_EXCLUDED_SETTINGS.forEach(k => delete s[k]); // 二重の安全弁
+        updateSettings(s);
+      }
+      if (data.fitnessProfile && typeof data.fitnessProfile === 'object') {
+        setFitnessProfile(data.fitnessProfile);
+      }
+      // グローバルコンテキストは現在が空の場合のみ反映（非破壊）
+      if (data.globalContext && !getGlobalContext()) setGlobalContext(data.globalContext);
+      // アクティブペルソナは復元後に実在する場合のみ反映
+      if (data.activePersonaId && getPersonas().some(p => p.id === data.activePersonaId)) {
+        setActivePersonaId(data.activePersonaId);
+      }
+    }
+
+    return report;
+  }
+
   // ── Daily Summary（今日の会話要約・日中記憶補完） ──
 
   /**
@@ -846,6 +1019,106 @@ const MindLinkStorage = (() => {
     });
   }
 
+  // ── Reference Images（参照画像ライブラリ・最大5枚） ──
+  const MAX_REFERENCE_IMAGES = 5;
+
+  async function getReferenceImages() {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(REFERENCE_IMAGES_STORE, 'readonly');
+      const req = tx.objectStore(REFERENCE_IMAGES_STORE).getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function saveReferenceImage(image) {
+    const existing = await getReferenceImages();
+    const isUpdate = image.id && existing.some(r => r.id === image.id);
+    if (!isUpdate && existing.length >= MAX_REFERENCE_IMAGES) {
+      throw new Error(`参照画像は最大${MAX_REFERENCE_IMAGES}枚までです。不要な画像を削除してください。`);
+    }
+    image.id = image.id || 'ref_' + Date.now();
+    image.createdAt = image.createdAt || Date.now();
+    image.updatedAt = Date.now();
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(REFERENCE_IMAGES_STORE, 'readwrite');
+      const req = tx.objectStore(REFERENCE_IMAGES_STORE).put(image);
+      req.onsuccess = () => resolve(image);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function updateReferenceImage(id, partial) {
+    const images = await getReferenceImages();
+    const item = images.find(r => r.id === id);
+    if (!item) return false;
+    return await saveReferenceImage({ ...item, ...partial, id });
+  }
+
+  async function deleteReferenceImage(id) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(REFERENCE_IMAGES_STORE, 'readwrite');
+      const req = tx.objectStore(REFERENCE_IMAGES_STORE).delete(id);
+      req.onsuccess = () => resolve(true);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  // ── Generated Images（生成画像本体・メッセージからは imageId で参照） ──
+  async function saveGeneratedImage(image) {
+    image.id = image.id || 'gen_' + Date.now();
+    image.createdAt = image.createdAt || Date.now();
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(GENERATED_IMAGES_STORE, 'readwrite');
+      const req = tx.objectStore(GENERATED_IMAGES_STORE).put(image);
+      req.onsuccess = () => resolve(image);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function getGeneratedImage(id) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(GENERATED_IMAGES_STORE, 'readonly');
+      const req = tx.objectStore(GENERATED_IMAGES_STORE).get(id);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function deleteGeneratedImage(id) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(GENERATED_IMAGES_STORE, 'readwrite');
+      const req = tx.objectStore(GENERATED_IMAGES_STORE).delete(id);
+      req.onsuccess = () => resolve(true);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  // 7日（デフォルト）を過ぎた生成画像の本体を削除する（起動時に呼ばれる）。
+  // メッセージ側の参照は残るため、チャットにはプレースホルダーが表示される。
+  async function cleanupOldGeneratedImages(days = 7) {
+    const db = await openDB();
+    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(GENERATED_IMAGES_STORE, 'readwrite');
+      const store = tx.objectStore(GENERATED_IMAGES_STORE);
+      const req = store.getAll();
+      req.onsuccess = () => {
+        const old = (req.result || []).filter(img => img.createdAt < cutoff);
+        old.forEach(img => store.delete(img.id));
+        if (old.length > 0) console.log(`[MindLink] 生成画像の自動整理: ${old.length}件削除`);
+        resolve(old.length);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  }
+
   // ── Fitness Profile（身長など基本情報・専用localStorageキー） ──
   function getFitnessProfile() {
     return get('fitnessProfile', { height: null });
@@ -875,11 +1148,14 @@ const MindLinkStorage = (() => {
     getReflections, saveReflection, deleteReflection, updateReflection,
     idbSetToken, idbGetToken, idbDeleteToken,
     exportRAGData, importRAGData,
+    exportFullBackup, importFullBackup,
     getDailySummary, saveDailySummary, deleteDailySummary,
     getCalendarEvents, saveCalendarEvent, deleteCalendarEvent, updateCalendarEvent, getCalendarEventsForDate,
     getFitnessLogs, getFitnessLogByDate, saveFitnessLog, deleteFitnessLog,
     getFitnessMenus, saveFitnessMenu, deleteFitnessMenu,
     getFitnessProfile, setFitnessProfile,
+    getReferenceImages, saveReferenceImage, updateReferenceImage, deleteReferenceImage,
+    saveGeneratedImage, getGeneratedImage, deleteGeneratedImage, cleanupOldGeneratedImages,
   };
 })();
 

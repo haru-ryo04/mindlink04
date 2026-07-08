@@ -787,6 +787,48 @@ body {
 }
 .message-attachment-file:hover { color: var(--color-accent); }
 
+/* ── 生成画像（画像生成機能） ── */
+.generated-image-slot { position: relative; }
+.generated-image {
+  display: block; max-width: 100%; max-height: 360px; object-fit: contain;
+}
+.generated-image-loading,
+.generated-image-expired {
+  padding: 18px 14px; font-size: 0.85rem; color: var(--color-text-2);
+  background: var(--color-surface-2); text-align: center;
+}
+.generated-image-save-btn {
+  position: absolute; right: 8px; bottom: 8px;
+  padding: 5px 10px; font-size: 0.8rem; border: none; border-radius: 8px;
+  background: rgba(0, 0, 0, 0.55); color: #fff; cursor: pointer;
+}
+.generated-image-save-btn:active { transform: scale(0.96); }
+
+/* ── 参照画像ライブラリ（設定画面） ── */
+#reference-image-list { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; }
+.reference-image-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px; border: 1px solid var(--color-border); border-radius: 10px;
+  background: var(--color-surface-2);
+}
+.reference-image-thumb {
+  width: 48px; height: 48px; border-radius: 8px; object-fit: cover; flex-shrink: 0;
+  border: 1px solid var(--color-border);
+}
+.reference-image-name {
+  flex: 1; min-width: 0; padding: 6px 8px; font-size: 0.9rem;
+  border: 1px solid var(--color-border); border-radius: 8px;
+  background: var(--color-surface); color: var(--color-text);
+}
+.reference-image-pin-btn,
+.reference-image-delete-btn {
+  border: none; background: transparent; font-size: 1.05rem; cursor: pointer;
+  padding: 6px; border-radius: 8px; opacity: 0.55;
+}
+.reference-image-pin-btn.pinned { opacity: 1; }
+.reference-image-pin-btn:hover,
+.reference-image-delete-btn:hover { background: var(--color-surface); opacity: 1; }
+
 .btn-send {
   width: 36px; height: 36px; border-radius: 10px;
   background: linear-gradient(135deg, var(--color-accent), var(--color-accent-2));

@@ -24,6 +24,19 @@ const MindLinkApp = (() => {
     if (window.MindLinkCamera) MindLinkCamera.init();
     MindLinkReflection.initListeners();
 
+    // ── 追い省察: 前日の未省察分があれば自動実行 ──
+    // 起動直後の負荷を避けて少し遅らせる。ロック中はスキップ（APIキーが使えないため。
+    // その場合も記憶ノートのバナーから手動実行できる）。
+    setTimeout(() => {
+      try {
+        if (!MindLinkAuth.isLocked() && window.MindLinkReflection?.runCatchupReflectionIfNeeded) {
+          MindLinkReflection.runCatchupReflectionIfNeeded();
+        }
+      } catch (e) {
+        console.warn('[MindLink] 追い省察チェックに失敗:', e);
+      }
+    }, 8000);
+
     // ── OAuth コールバック振り分け ──
     // Spotify は state が 'spotify_' で始まる。Google と干渉しないよう先に処理する。
     const _urlParams    = new URLSearchParams(window.location.search);
@@ -631,6 +644,15 @@ const MindLinkApp = (() => {
     const summaryModelSel = document.getElementById('setting-summary-model');
     if (summaryModelSel) summaryModelSel.value = settings.summaryModel || 'gemini-3.5-flash';
 
+    // 画像生成設定
+    const imageModelSel = document.getElementById('setting-image-model');
+    if (imageModelSel) imageModelSel.value = settings.imageModel || 'gemini-3.1-flash-image';
+    const imageAspectSel = document.getElementById('setting-image-aspect');
+    if (imageAspectSel) imageAspectSel.value = settings.imageAspectRatio || '1:1';
+    const imageResSel = document.getElementById('setting-image-resolution');
+    if (imageResSel) imageResSel.value = settings.imageResolution || '2K';
+    renderReferenceImageList();
+
     // APIキー状態表示
     const apiKeyInput = document.getElementById('settings-api-key');
     if (apiKeyInput) {
@@ -653,10 +675,193 @@ const MindLinkApp = (() => {
     const googleClientSecret = document.getElementById('setting-google-client-secret')?.value.trim();
     const searchEngineId = document.getElementById('setting-search-engine-id')?.value.trim();
     const spotifyClientId = document.getElementById('setting-spotify-client-id')?.value.trim();
+    const imageModel = document.getElementById('setting-image-model')?.value;
+    const imageAspectRatio = document.getElementById('setting-image-aspect')?.value;
+    const imageResolution = document.getElementById('setting-image-resolution')?.value;
 
-    MindLinkStorage.updateSettings({ temperature, maxTokens, autoLockMinutes, fontSize, summaryModel, googleClientId, googleClientSecret, searchEngineId, spotifyClientId });
+    MindLinkStorage.updateSettings({ temperature, maxTokens, autoLockMinutes, fontSize, summaryModel, googleClientId, googleClientSecret, searchEngineId, spotifyClientId, imageModel, imageAspectRatio, imageResolution });
     MindLinkAuth.resetLockTimer();
     showToast('設定を保存しました');
+  }
+
+  // ── 参照画像ライブラリ（画像生成タブ） ──
+
+  async function renderReferenceImageList() {
+    const listEl = document.getElementById('reference-image-list');
+    if (!listEl) return;
+    let refs = [];
+    try {
+      refs = await MindLinkStorage.getReferenceImages();
+    } catch (e) {
+      console.warn('[MindLink] 参照画像の読み込みに失敗:', e);
+      return;
+    }
+    refs.sort((a, b) => a.createdAt - b.createdAt);
+    listEl.innerHTML = '';
+
+    for (const ref of refs) {
+      const item = document.createElement('div');
+      item.className = 'reference-image-item';
+
+      const thumb = document.createElement('img');
+      thumb.className = 'reference-image-thumb';
+      thumb.src = ref.data;
+      thumb.alt = '';
+
+      // 名前とメモを縦に並べる入力欄コンテナ
+      const fields = document.createElement('div');
+      fields.style.cssText = 'flex:1;min-width:0;display:flex;flex-direction:column;gap:6px;';
+
+      const nameInput = document.createElement('input');
+      nameInput.type = 'text';
+      nameInput.className = 'reference-image-name';
+      nameInput.value = ref.name || '';
+      nameInput.placeholder = '名前（例: ゆんみ）';
+      nameInput.addEventListener('change', async () => {
+        const name = nameInput.value.trim();
+        if (!name) {
+          showToast('名前を入力してください');
+          nameInput.value = ref.name || '';
+          return;
+        }
+        const all = await MindLinkStorage.getReferenceImages();
+        if (all.some(r => r.id !== ref.id && r.name === name)) {
+          showToast(`「${name}」は既に使われています。別の名前にしてください`);
+          nameInput.value = ref.name || '';
+          return;
+        }
+        await MindLinkStorage.updateReferenceImage(ref.id, { name });
+        showToast(`名前を「${name}」に変更しました`);
+        renderReferenceImageList();
+      });
+
+      // 体型・特徴メモ（任意）: 画像生成時に「顔・髪型は参照画像、体型はこのメモ」として反映される
+      const noteInput = document.createElement('input');
+      noteInput.type = 'text';
+      noteInput.className = 'reference-image-name';
+      noteInput.value = ref.bodyNote || '';
+      noteInput.placeholder = '体型・特徴メモ（例: ややぽっちゃり・色白）';
+      noteInput.addEventListener('change', async () => {
+        await MindLinkStorage.updateReferenceImage(ref.id, { bodyNote: noteInput.value.trim() });
+        showToast('特徴メモを保存しました');
+      });
+
+      const pinBtn = document.createElement('button');
+      pinBtn.className = 'reference-image-pin-btn' + (ref.isPinned ? ' pinned' : '');
+      pinBtn.title = '常時参照（最大2枚）。ピン留めした画像の外見はペルソナが常に把握します';
+      pinBtn.textContent = ref.isPinned ? '📌' : '📍';
+      pinBtn.addEventListener('click', async () => {
+        if (!ref.isPinned) {
+          const all = await MindLinkStorage.getReferenceImages();
+          if (all.filter(r => r.isPinned).length >= 2) {
+            showToast('ピン留めは2枚までです。先にどれかを外してください');
+            return;
+          }
+        }
+        await MindLinkStorage.updateReferenceImage(ref.id, { isPinned: !ref.isPinned });
+        renderReferenceImageList();
+      });
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'reference-image-delete-btn';
+      deleteBtn.title = '削除';
+      deleteBtn.textContent = '🗑';
+      deleteBtn.addEventListener('click', () => {
+        showConfirm('参照画像を削除', `「${ref.name}」を削除しますか？\nペルソナはこの画像を参照できなくなります。`, async () => {
+          await MindLinkStorage.deleteReferenceImage(ref.id);
+          renderReferenceImageList();
+          showToast('参照画像を削除しました');
+        });
+      });
+
+      item.appendChild(thumb);
+      fields.appendChild(nameInput);
+      fields.appendChild(noteInput);
+      item.appendChild(fields);
+      item.appendChild(pinBtn);
+      item.appendChild(deleteBtn);
+      listEl.appendChild(item);
+    }
+
+    // 上限（5枚）で追加ボタンを無効化
+    const addBtn = document.getElementById('btn-add-reference-image');
+    if (addBtn) {
+      addBtn.disabled = refs.length >= 5;
+      addBtn.textContent = refs.length >= 5 ? '上限（5枚）に達しています' : '＋ 画像を追加';
+    }
+  }
+
+  // 追加時の縮小: 長辺1024pxのJPEGに変換（IndexedDB容量と生成時の送信トークンの節約）
+  function resizeImageFile(file, maxDim = 1024) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const img = new Image();
+        img.onload = () => {
+          const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+          const width = Math.round(img.width * scale);
+          const height = Math.round(img.height * scale);
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL('image/jpeg', 0.85));
+        };
+        img.onerror = () => reject(new Error('画像の読み込みに失敗しました'));
+        img.src = reader.result;
+      };
+      reader.onerror = () => reject(new Error('ファイルの読み込みに失敗しました'));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function initReferenceImageEvents() {
+    const addBtn = document.getElementById('btn-add-reference-image');
+    const fileInput = document.getElementById('input-reference-image');
+    addBtn?.addEventListener('click', () => fileInput?.click());
+    fileInput?.addEventListener('change', async (e) => {
+      const file = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if (!file) return;
+
+      const name = window.prompt('この画像の名前を入力してください（例: ゆんみ、レン）\nペルソナはこの名前で画像を認識します。');
+      if (!name || !name.trim()) {
+        showToast('名前が未入力のため追加を中止しました');
+        return;
+      }
+      const trimmedName = name.trim();
+
+      try {
+        const all = await MindLinkStorage.getReferenceImages();
+        if (all.some(r => r.name === trimmedName)) {
+          showToast(`「${trimmedName}」は既に使われています。別の名前にしてください`);
+          return;
+        }
+        showToast('画像を処理しています…');
+        const dataUrl = await resizeImageFile(file, 1024);
+
+        // 外見説明を自動生成（1回だけ・失敗しても説明なしで追加を続行）
+        let description = '';
+        try {
+          description = await MindLinkImageGen.describeReferenceImage(dataUrl);
+        } catch (descErr) {
+          console.warn('[MindLink] 参照画像の説明生成に失敗（説明なしで保存）:', descErr);
+        }
+
+        await MindLinkStorage.saveReferenceImage({
+          name: trimmedName,
+          data: dataUrl,
+          mimeType: 'image/jpeg',
+          description,
+          isPinned: false,
+        });
+        renderReferenceImageList();
+        showToast(`参照画像「${trimmedName}」を追加しました ✨`);
+      } catch (err) {
+        console.error('[MindLink] 参照画像の追加に失敗:', err);
+        showToast(err.message || '参照画像の追加に失敗しました');
+      }
+    });
   }
 
   // ── PINキーパッド処理 ──
@@ -1026,9 +1231,12 @@ const MindLinkApp = (() => {
     });
 
     // 設定変更イベント（リアルタイム保存）
-    ['setting-model', 'setting-temperature', 'setting-max-tokens', 'setting-auto-lock', 'setting-font-size', 'setting-summary-model'].forEach(id => {
+    ['setting-model', 'setting-temperature', 'setting-max-tokens', 'setting-auto-lock', 'setting-font-size', 'setting-summary-model', 'setting-image-model', 'setting-image-aspect', 'setting-image-resolution'].forEach(id => {
       document.getElementById(id)?.addEventListener('change', saveSettings);
     });
+
+    // 参照画像ライブラリ（画像生成タブ）
+    initReferenceImageEvents();
 
     // モーダル全体の保存ボタン
     document.getElementById('btn-save-settings')?.addEventListener('click', saveSettings);

@@ -66,11 +66,12 @@ const MindLinkRAG = (() => {
   }
 
   // 関連する個別記憶(Memory)の検索
-  async function searchMemories(query, topK = 3) {
+  // precomputedEmbedding を渡すと内部でのEmbedding生成を省略できる（省察RAG検索との共用でAPI呼び出し削減）
+  async function searchMemories(query, topK = 3, precomputedEmbedding = null) {
     try {
-      if (!window.MindLinkAPI || !window.MindLinkAPI.getEmbedding) return [];
-      
-      const queryEmbedding = await window.MindLinkAPI.getEmbedding(query);
+      if (!precomputedEmbedding && (!window.MindLinkAPI || !window.MindLinkAPI.getEmbedding)) return [];
+
+      const queryEmbedding = precomputedEmbedding || await window.MindLinkAPI.getEmbedding(query);
       const memories = MindLinkStorage.getMemories();
       
       if (memories.length === 0) return [];
@@ -128,11 +129,51 @@ const MindLinkRAG = (() => {
     }
   }
 
+  // 直近の未解決スレッドの取得（類似度に関係なく「昨日の関心」を地続きで注入するための取得）
+  // Embedding・API呼び出しなし。IndexedDBから新しい順に topK 件返すだけ。
+  async function getRecentResearchThreads(topK = 2) {
+    try {
+      const reflections = await MindLinkStorage.getReflections();
+      const threads = reflections.filter(r => r.sectionType === 'research_thread' && r.content);
+      if (threads.length === 0) return [];
+      threads.sort((a, b) => b.createdAt - a.createdAt);
+      return threads.slice(0, topK);
+    } catch (e) {
+      console.error('[MindLink RAG] Recent research threads fetch error:', e);
+      return [];
+    }
+  }
+
+  // いいね学習（関心トピック・響いた気づき）の最新1件ずつを取得（常時注入用）
+  // Embedding・API呼び出しなし。IndexedDBから各タイプの最新を返すだけ。
+  async function getRecentLikedLearnings() {
+    try {
+      const reflections = await MindLinkStorage.getReflections();
+      const liked = reflections
+        .filter(r => (r.sectionType === 'liked_topic' || r.sectionType === 'liked_insight') && r.content)
+        .sort((a, b) => b.createdAt - a.createdAt);
+      const result = [];
+      const seenTypes = new Set();
+      for (const r of liked) {
+        if (seenTypes.has(r.sectionType)) continue;
+        result.push(r);
+        seenTypes.add(r.sectionType);
+        if (result.length >= 2) break;
+      }
+      return result;
+    } catch (e) {
+      console.error('[MindLink RAG] Liked learnings fetch error:', e);
+      return [];
+    }
+  }
+
   return {
     cosineSimilarity,
     searchReflections,
     searchMemories,
-    searchResearchThreads
+    searchResearchThreads,
+    getRecentResearchThreads,
+    getRecentLikedLearnings
   };
 })();
 

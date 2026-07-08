@@ -17,6 +17,20 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css" id="hljs-theme">
+  <script>
+    // 初回描画前に保存済みテーマを適用（ダーク→ライトのちらつき/FOUC防止）
+    // localStorageの読み取りは同期のため、最初の描画前にテーマが確定する。
+    // 後続の app.js の applyTheme() は同じ値を再設定するだけなので二重適用の害はない。
+    (function() {
+      try {
+        var s = JSON.parse(localStorage.getItem('mindlink_settings') || '{}');
+        var t = s.theme || 'system';
+        if (t === 'system') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        document.documentElement.setAttribute('data-theme', t);
+        if (s.colorTheme) document.documentElement.setAttribute('data-color-theme', s.colorTheme);
+      } catch (e) { /* 読み取り失敗時はHTML既定のダークのまま */ }
+    })();
+  </script>
   <link rel="stylesheet" href="css/style.css">
   <style>
     /* Reflection Accordion Styles - Theme Integrated */
@@ -501,7 +515,7 @@
                 <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
               </svg>
             </button>
-            <input type="file" id="chat-file-input" style="display:none" accept="image/*,.pdf,.txt">
+            <input type="file" id="chat-file-input" style="display:none" accept="image/*,video/*,.pdf,.txt">
             <!-- カメラボタン -->
             <button class="btn-icon input-action-btn" id="btn-camera" title="カメラで撮影">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
@@ -690,6 +704,7 @@
           <button class="settings-tab" data-tab="profile">プロフィール</button>
           <button class="settings-tab" data-tab="api">API</button>
           <button class="settings-tab" data-tab="appearance">外観</button>
+          <button class="settings-tab" data-tab="image">画像生成</button>
           <button class="settings-tab" data-tab="google">Google連携</button>
           <button class="settings-tab" data-tab="security">セキュリティ</button>
         </div>
@@ -851,6 +866,45 @@
               <input type="range" class="setting-slider" id="setting-font-size" min="12" max="20" step="1" value="14">
               <span class="setting-value" id="setting-font-size-value">14px</span>
             </div>
+          </div>
+        </div>
+
+        <!-- Image Generation Tab -->
+        <div class="settings-panel" id="tab-image">
+          <div class="setting-group">
+            <label class="setting-label">🎨 画像生成モデル</label>
+            <select class="setting-select" id="setting-image-model">
+              <option value="gemini-3.1-flash-image">Nano Banana 2</option>
+              <option value="gemini-3-pro-image">Nano Banana Pro</option>
+              <option value="gemini-3.1-flash-lite-image">Nano Banana lite</option>
+            </select>
+            <p class="setting-hint">会話の中で「画像生成して」と頼んだときに使われるモデルです。</p>
+          </div>
+          <div class="setting-group">
+            <label class="setting-label">デフォルトのサイズ比率</label>
+            <select class="setting-select" id="setting-image-aspect">
+              <option value="1:1">1:1（正方形）</option>
+              <option value="3:4">3:4（縦）</option>
+              <option value="4:3">4:3（横）</option>
+              <option value="9:16">9:16（縦長・スマホ壁紙）</option>
+              <option value="16:9">16:9（横長）</option>
+            </select>
+            <p class="setting-hint">会話で「縦長で」などと指定すればその場で上書きされます。</p>
+          </div>
+          <div class="setting-group">
+            <label class="setting-label">解像度</label>
+            <select class="setting-select" id="setting-image-resolution">
+              <option value="2K">2K</option>
+              <option value="4K">4K（高精細・生成が遅め）</option>
+            </select>
+            <p class="setting-hint">※ Nano Banana liteは1K固定のため、この設定は適用されません。</p>
+          </div>
+          <div class="setting-group" style="padding-top: 15px; border-top: 1px solid var(--color-border);">
+            <label class="setting-label">🖼 参照画像ライブラリ（最大5枚）</label>
+            <p class="setting-hint">名前を付けた画像はペルソナが覚え、「私と〇〇の画像を作って」のように名前で指定できます。📌ピン留め（最大2枚）した画像の外見は常にペルソナに伝わります。生成画像はチャット上で7日間保持され、その後本体は自動整理されます。</p>
+            <div id="reference-image-list"></div>
+            <input type="file" id="input-reference-image" accept="image/*" style="display: none;">
+            <button class="btn-secondary btn-sm" id="btn-add-reference-image">＋ 画像を追加</button>
           </div>
         </div>
 
@@ -1289,6 +1343,13 @@
             <button class="btn-secondary btn-sm" id="btn-migrate-embeddings" title="旧記憶をGemini Embedding 2に移行">
               🔄 Embedding移行
             </button>
+            <button class="btn-secondary btn-sm" id="btn-export-full" title="ペルソナ・記憶・スレッド・省察・カレンダー等を1ファイルに保存（APIキー・参照画像は除く）">
+              💾 全体バックアップ
+            </button>
+            <button class="btn-secondary btn-sm" id="btn-import-full" title="全体バックアップから復元（重複データはスキップ）">
+              📂 全体復元
+            </button>
+            <input type="file" id="input-import-full" accept="application/json" style="display: none;">
             <button class="btn-primary btn-sm" id="btn-run-reflection-manual">
                ✨ 今すぐ省察
             </button>
@@ -1384,6 +1445,7 @@
   <script src="js/chat.js?v=42"></script>
   <script src="js/google-auth.js?v=42"></script>
   <script src="js/google-services.js?v=42"></script>
+  <script src="js/image-gen.js?v=42"></script>
   <script src="js/rag.js?v=42"></script>
   <script src="js/reflection.js?v=42"></script>
   <script src="js/calendar.js?v=42"></script>
